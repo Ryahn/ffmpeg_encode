@@ -100,7 +100,14 @@ class Encoder:
         """Run the encoder process"""
         try:
             self._log("INFO", f"Starting {encoder_name} encoding...")
-            self._log("INFO", f"Command: {' '.join(args)}")
+            # Format command for display (quote paths with spaces for readability)
+            cmd_display = []
+            for arg in args:
+                if ' ' in arg and not (arg.startswith('"') and arg.endswith('"')):
+                    cmd_display.append(f'"{arg}"')
+                else:
+                    cmd_display.append(arg)
+            self._log("INFO", f"Command: {' '.join(cmd_display)}")
             
             # Check if encoder executable exists
             encoder_exe = args[0] if args else None

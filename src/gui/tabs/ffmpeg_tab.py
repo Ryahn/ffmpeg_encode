@@ -799,12 +799,17 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Parse the command string into a list of arguments
         # Use shlex to properly handle quoted arguments
-        # Note: shlex.split() will automatically unquote paths, so paths with spaces will be correctly parsed as single arguments
+        # Note: When passing a list to subprocess.Popen(), quotes are NOT needed - each element is a separate argument
         try:
             args = shlex.split(command, posix=False)  # posix=False for Windows compatibility
+            # Explicitly strip quotes from all arguments (shlex should do this, but ensure it's done)
+            # This is critical because subprocess.Popen() expects unquoted arguments when using a list
+            args = [arg.strip('"').strip("'") for arg in args]
         except Exception:
             # Fallback: simple split if shlex fails (but this won't handle spaces correctly)
             args = command.split()
+            # Still strip quotes in fallback
+            args = [arg.strip('"').strip("'") for arg in args]
         
         # Replace "ffmpeg" with actual path if present (this should already be done, but just in case)
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
