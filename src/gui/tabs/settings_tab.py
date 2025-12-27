@@ -40,7 +40,7 @@ class SettingsTab(ctk.CTkFrame):
         )
         
         # FFmpeg path
-        self._create_path_setting(
+        self.ffmpeg_entry = self._create_path_setting(
             path_frame,
             "FFmpeg:",
             config.get_ffmpeg_path(),
@@ -50,9 +50,10 @@ class SettingsTab(ctk.CTkFrame):
             "FFmpeg is used for encoding videos when using the FFmpeg tab.\n"
             "If not found, can be installed via Chocolatey (Windows) or Homebrew (Mac)."
         )
+        self.ffmpeg_entry.bind("<FocusOut>", lambda e: self._on_ffmpeg_path_changed())
         
         # HandBrake path
-        self._create_path_setting(
+        self.handbrake_entry = self._create_path_setting(
             path_frame,
             "HandBrake CLI:",
             config.get_handbrake_path(),
@@ -62,9 +63,10 @@ class SettingsTab(ctk.CTkFrame):
             "HandBrake is used for encoding videos when using the HandBrake tab.\n"
             "If not found, can be installed via Chocolatey (Windows) or Homebrew (Mac)."
         )
+        self.handbrake_entry.bind("<FocusOut>", lambda e: self._on_handbrake_path_changed())
         
         # mkvinfo path
-        self._create_path_setting(
+        self.mkvinfo_entry = self._create_path_setting(
             path_frame,
             "mkvinfo:",
             config.get_mkvinfo_path(),
@@ -74,6 +76,7 @@ class SettingsTab(ctk.CTkFrame):
             "mkvinfo is used to analyze MKV files and detect audio/subtitle tracks.\n"
             "If not found, can be installed via Chocolatey (Windows) or Homebrew (Mac)."
         )
+        self.mkvinfo_entry.bind("<FocusOut>", lambda e: self._on_mkvinfo_path_changed())
         
         # Output settings section
         output_frame = ctk.CTkFrame(scrollable)
@@ -246,6 +249,27 @@ class SettingsTab(ctk.CTkFrame):
             "Comma-separated list (e.g., 'Japanese, JPN, 日本語').\n"
             "Tracks matching these patterns will be skipped even if they match language/name patterns."
         )
+        
+        # Save button at the bottom
+        save_frame = ctk.CTkFrame(scrollable)
+        save_frame.pack(fill="x", pady=20)
+        
+        save_info = ctk.CTkLabel(
+            save_frame,
+            text="Settings are automatically saved when changed. Use 'Save All' to explicitly save all current values.",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        )
+        save_info.pack(pady=10)
+        
+        save_button = ctk.CTkButton(
+            save_frame,
+            text="Save All Settings",
+            command=self._save_all_settings,
+            width=150,
+            height=35
+        )
+        save_button.pack(pady=10)
     
     def _create_help_icon(self, parent, help_text: str):
         """Create a help icon with tooltip"""
@@ -434,4 +458,36 @@ class SettingsTab(ctk.CTkFrame):
         """Handle subtitle exclude patterns change"""
         patterns = [p.strip() for p in value.split(",") if p.strip()]
         config.set_subtitle_exclude_patterns(patterns)
+    
+    def _on_ffmpeg_path_changed(self):
+        """Handle FFmpeg path change (when entry loses focus)"""
+        path = self.ffmpeg_entry.get().strip()
+        config.set_ffmpeg_path(path)
+    
+    def _on_handbrake_path_changed(self):
+        """Handle HandBrake path change (when entry loses focus)"""
+        path = self.handbrake_entry.get().strip()
+        config.set_handbrake_path(path)
+    
+    def _on_mkvinfo_path_changed(self):
+        """Handle mkvinfo path change (when entry loses focus)"""
+        path = self.mkvinfo_entry.get().strip()
+        config.set_mkvinfo_path(path)
+    
+    def _save_all_settings(self):
+        """Explicitly save all current settings"""
+        try:
+            # Save path entries
+            config.set_ffmpeg_path(self.ffmpeg_entry.get().strip())
+            config.set_handbrake_path(self.handbrake_entry.get().strip())
+            config.set_mkvinfo_path(self.mkvinfo_entry.get().strip())
+            
+            # Save other settings (these should already be saved automatically, but ensure they are)
+            config.set_default_output_suffix(self.suffix_entry.get())
+            config.set_encoding_mode(self.mode_var.get())
+            config.set_skip_existing(self.skip_var.get())
+            
+            messagebox.showinfo("Settings Saved", "All settings have been saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save settings: {str(e)}")
 
