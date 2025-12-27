@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -214,6 +215,84 @@ class Config:
         if name in commands:
             del commands[name]
             self.set_saved_ffmpeg_commands(commands)
+    
+    def get_saved_presets(self) -> dict:
+        """Get saved preset paths (name -> path mapping)"""
+        return self.get("saved_presets", {})
+    
+    def set_saved_presets(self, presets: dict):
+        """Set saved preset paths"""
+        self.set("saved_presets", presets)
+    
+    def save_preset(self, name: str, preset_path: Path):
+        """Save a preset by copying it to the config directory"""
+        # Create presets directory if it doesn't exist
+        presets_dir = self.config_dir / "presets"
+        presets_dir.mkdir(parents=True, exist_ok=True)
+        
+        presets = self.get_saved_presets()
+        
+        # If preset with this name already exists, use the same path
+        if name in presets:
+            dest_path = Path(presets[name])
+        else:
+            # Create a safe filename from the preset name
+            safe_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in name)
+            safe_name = safe_name.strip()
+            if not safe_name:
+                safe_name = "preset"
+            
+            # Copy preset file to config directory
+            dest_path = presets_dir / f"{safe_name}.json"
+            
+            # Handle duplicate filenames
+            counter = 1
+            while dest_path.exists():
+                dest_path = presets_dir / f"{safe_name}_{counter}.json"
+                counter += 1
+        
+        # Copy/update the preset file
+        shutil.copy2(preset_path, dest_path)
+        
+        # Save the mapping (name -> saved path)
+        presets[name] = str(dest_path)
+        self.set_saved_presets(presets)
+        
+        return dest_path
+    
+    def get_preset_path(self, name: str) -> Optional[Path]:
+        """Get the saved path for a preset by name"""
+        presets = self.get_saved_presets()
+        path_str = presets.get(name)
+        if path_str:
+            path = Path(path_str)
+            if path.exists():
+                return path
+        return None
+    
+    def delete_preset(self, name: str):
+        """Delete a saved preset"""
+        presets = self.get_saved_presets()
+        if name in presets:
+            path_str = presets[name]
+            path = Path(path_str)
+            # Delete the file if it exists
+            if path.exists():
+                try:
+                    path.unlink()
+                except Exception:
+                    pass
+            # Remove from config
+            del presets[name]
+            self.set_saved_presets(presets)
+    
+    def get_last_used_preset(self) -> Optional[str]:
+        """Get the last used preset name"""
+        return self.get("last_used_preset")
+    
+    def set_last_used_preset(self, name: str):
+        """Set the last used preset name"""
+        self.set("last_used_preset", name)
 
 
 # Global config instance

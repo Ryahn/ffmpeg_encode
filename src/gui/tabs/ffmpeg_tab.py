@@ -40,13 +40,17 @@ class FFmpegTab(ctk.CTkFrame):
         preset_frame.pack(fill="x", padx=10, pady=10)
         
         ctk.CTkLabel(preset_frame, text="HandBrake Preset:").pack(side="left", padx=5)
-        self.preset_label = ctk.CTkLabel(
+        
+        # Preset dropdown
+        self.preset_var = ctk.StringVar(value="")
+        self.preset_dropdown = ctk.CTkComboBox(
             preset_frame,
-            text="No preset loaded",
+            variable=self.preset_var,
             width=300,
-            anchor="w"
+            command=self._on_preset_selected
         )
-        self.preset_label.pack(side="left", padx=5)
+        self.preset_dropdown.pack(side="left", padx=5)
+        self._refresh_preset_dropdown()
         
         ctk.CTkButton(
             preset_frame,
@@ -292,6 +296,9 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Initialize encoder
         self._init_encoder()
+        
+        # Try to load last used preset
+        self._load_last_preset()
     
     def _init_encoder(self):
         """Initialize encoder with paths from config"""
@@ -310,8 +317,18 @@ class FFmpegTab(ctk.CTkFrame):
             mkvinfo_path=mkvinfo_path if mkvinfo_path != "mkvinfo" else None
         )
     
+    def _refresh_preset_dropdown(self):
+        """Refresh the preset dropdown with saved presets"""
+        saved_presets = config.get_saved_presets()
+        preset_names = list(saved_presets.keys())
+        
+        if preset_names:
+            self.preset_dropdown.configure(values=[""] + preset_names)
+        else:
+            self.preset_dropdown.configure(values=[""])
+    
     def _load_preset(self):
-        """Load HandBrake preset file"""
+        """Load HandBrake preset file from file dialog"""
         file = filedialog.askopenfilename(
             title="Select HandBrake preset JSON file",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
@@ -319,18 +336,59 @@ class FFmpegTab(ctk.CTkFrame):
         
         if file:
             try:
-                self.preset_parser = PresetParser(Path(file))
-                self.ffmpeg_translator = FFmpegTranslator(self.preset_parser)
-                
-                preset_name = self.preset_parser.get_preset_name()
-                self.preset_label.configure(text=preset_name)
-                
-                # Update command preview (with placeholder file)
-                self._update_command_preview()
-                
-                self._on_log("INFO", f"Loaded preset: {preset_name}")
+                self._load_preset_from_path(Path(file), save=True)
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load preset: {str(e)}")
+    
+    def _load_preset_from_path(self, preset_path: Path, save: bool = False):
+        """Load a preset from a file path"""
+        self.preset_parser = PresetParser(preset_path)
+        self.ffmpeg_translator = FFmpegTranslator(self.preset_parser)
+        
+        preset_name = self.preset_parser.get_preset_name()
+        
+        # Save the preset to config directory if requested
+        if save:
+            config.save_preset(preset_name, preset_path)
+            config.set_last_used_preset(preset_name)
+            self._refresh_preset_dropdown()
+            # Update dropdown to show the selected preset
+            self.preset_var.set(preset_name)
+        else:
+            # Still set as last used
+            config.set_last_used_preset(preset_name)
+        
+        # Update command preview (with placeholder file)
+        self._update_command_preview()
+        
+        self._on_log("INFO", f"Loaded preset: {preset_name}")
+    
+    def _on_preset_selected(self, choice: str):
+        """Handle preset selection from dropdown"""
+        if not choice:
+            return
+        
+        preset_path = config.get_preset_path(choice)
+        if preset_path:
+            try:
+                self._load_preset_from_path(preset_path, save=False)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load preset: {str(e)}")
+                self._refresh_preset_dropdown()
+                self.preset_var.set("")
+    
+    def _load_last_preset(self):
+        """Load the last used preset if available"""
+        last_preset = config.get_last_used_preset()
+        if last_preset:
+            preset_path = config.get_preset_path(last_preset)
+            if preset_path:
+                try:
+                    self._load_preset_from_path(preset_path, save=False)
+                    self.preset_var.set(last_preset)
+                except Exception:
+                    # If preset file doesn't exist or is invalid, just ignore
+                    pass
     
     def _update_command_preview(self):
         """Update FFmpeg command preview"""
