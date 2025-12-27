@@ -3,9 +3,11 @@
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 import threading
 import tempfile
+import shlex
+import re
 
 from ..widgets.progress_bar import ProgressDisplay
 from ..widgets.log_viewer import LogViewer
@@ -53,19 +55,152 @@ class FFmpegTab(ctk.CTkFrame):
             width=100
         ).pack(side="left", padx=5)
         
-        # Command preview
+        # Command editor
         cmd_frame = ctk.CTkFrame(self)
         cmd_frame.pack(fill="x", padx=10, pady=10)
         
+        cmd_header = ctk.CTkFrame(cmd_frame)
+        cmd_header.pack(fill="x", padx=10, pady=5)
+        
+        header_left = ctk.CTkFrame(cmd_header)
+        header_left.pack(side="left", padx=5)
+        
         ctk.CTkLabel(
-            cmd_frame,
+            header_left,
             text="FFmpeg Command:",
             font=ctk.CTkFont(size=12, weight="bold")
-        ).pack(anchor="w", padx=10, pady=5)
+        ).pack(side="left", padx=5)
         
-        self.cmd_text = ctk.CTkTextbox(cmd_frame, height=100)
+        # Note about placeholders
+        note_label = ctk.CTkLabel(
+            header_left,
+            text="(Note: 'input.mkv' and 'output.mp4' are example placeholders - actual file paths will be used during encoding)",
+            font=ctk.CTkFont(size=9),
+            text_color="gray"
+        )
+        note_label.pack(side="left", padx=10)
+        
+        # Command management buttons
+        cmd_buttons = ctk.CTkFrame(cmd_header)
+        cmd_buttons.pack(side="right", padx=5)
+        
+        ctk.CTkButton(
+            cmd_buttons,
+            text="Save",
+            command=self._save_command,
+            width=80
+        ).pack(side="left", padx=2)
+        
+        ctk.CTkButton(
+            cmd_buttons,
+            text="Load",
+            command=self._load_saved_command,
+            width=80
+        ).pack(side="left", padx=2)
+        
+        ctk.CTkButton(
+            cmd_buttons,
+            text="Load from File",
+            command=self._load_command_from_file,
+            width=100
+        ).pack(side="left", padx=2)
+        
+        ctk.CTkButton(
+            cmd_buttons,
+            text="Save to File",
+            command=self._save_command_to_file,
+            width=100
+        ).pack(side="left", padx=2)
+        
+        ctk.CTkButton(
+            cmd_buttons,
+            text="Reset",
+            command=self._reset_command,
+            width=80
+        ).pack(side="left", padx=2)
+        
+        # Saved commands dropdown
+        saved_frame = ctk.CTkFrame(cmd_frame)
+        saved_frame.pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(saved_frame, text="Saved Commands:").pack(side="left", padx=5)
+        self.saved_cmd_var = ctk.StringVar(value="")
+        self.saved_cmd_dropdown = ctk.CTkComboBox(
+            saved_frame,
+            variable=self.saved_cmd_var,
+            values=[""],
+            command=self._on_saved_command_selected,
+            width=300
+        )
+        self.saved_cmd_dropdown.pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            saved_frame,
+            text="Delete",
+            command=self._delete_saved_command,
+            width=80
+        ).pack(side="left", padx=5)
+        
+        # Info note about placeholders
+        info_frame = ctk.CTkFrame(cmd_frame)
+        info_frame.pack(fill="x", padx=10, pady=(5, 0))
+        
+        info_label = ctk.CTkLabel(
+            info_frame,
+            text="ℹ️ Note: 'input.mkv' and 'output.mp4' shown below are EXAMPLE PLACEHOLDERS only. " +
+                 "During encoding, these will be automatically replaced with the actual input and output file paths.",
+            font=ctk.CTkFont(size=10),
+            text_color="yellow",
+            anchor="w",
+            justify="left",
+            wraplength=1000
+        )
+        info_label.pack(fill="x", padx=5, pady=5)
+        
+        # Command textbox (now editable)
+        self.cmd_text = ctk.CTkTextbox(cmd_frame, height=100, font=ctk.CTkFont(family="Courier", size=10))
         self.cmd_text.pack(fill="x", padx=10, pady=5)
-        self.cmd_text.configure(state="disabled")
+        # Keep it enabled for editing
+        
+        # Placeholder help
+        placeholder_frame = ctk.CTkFrame(cmd_frame)
+        placeholder_frame.pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(
+            placeholder_frame,
+            text="Placeholders:",
+            font=ctk.CTkFont(size=10)
+        ).pack(side="left", padx=5)
+        
+        placeholders = [
+            ("{INPUT}", "Input file"),
+            ("{OUTPUT}", "Output file"),
+            ("{AUDIO_TRACK}", "Audio track number"),
+            ("{SUBTITLE_TRACK}", "Subtitle track number"),
+            ("{SUBTITLE_FILE}", "Subtitle file path")
+        ]
+        
+        for placeholder, desc in placeholders:
+            btn = ctk.CTkButton(
+                placeholder_frame,
+                text=placeholder,
+                command=lambda p=placeholder: self._insert_placeholder(p),
+                width=120,
+                height=20,
+                font=ctk.CTkFont(size=9)
+            )
+            btn.pack(side="left", padx=2)
+        
+        help_label = ctk.CTkLabel(
+            placeholder_frame,
+            text="(Click to insert)",
+            font=ctk.CTkFont(size=9),
+            text_color="gray"
+        )
+        help_label.pack(side="left", padx=5)
+        
+        # Update saved commands dropdown
+        self._update_saved_commands_dropdown()
         
         # Encoding controls
         controls_frame = ctk.CTkFrame(self)
@@ -213,15 +348,127 @@ class FFmpegTab(ctk.CTkFrame):
             subtitle_track=None
         )
         
-        self.cmd_text.configure(state="normal")
         self.cmd_text.delete("1.0", "end")
         self.cmd_text.insert("1.0", cmd)
-        self.cmd_text.configure(state="disabled")
+    
+    def _save_command(self):
+        """Save the current command"""
+        command = self.cmd_text.get("1.0", "end-1c").strip()
+        if not command:
+            messagebox.showwarning("No Command", "No command to save")
+            return
+        
+        # Ask for a name
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Save Command", "Enter a name for this command:")
+        if name:
+            config.save_ffmpeg_command(name, command)
+            self._update_saved_commands_dropdown()
+            messagebox.showinfo("Saved", f"Command saved as '{name}'")
+    
+    def _load_saved_command(self):
+        """Load a saved command"""
+        saved_cmd = self.saved_cmd_var.get()
+        if not saved_cmd:
+            messagebox.showwarning("No Selection", "Please select a saved command from the dropdown")
+            return
+        
+        command = config.get_ffmpeg_command(saved_cmd)
+        if command:
+            self.cmd_text.delete("1.0", "end")
+            self.cmd_text.insert("1.0", command)
+        else:
+            messagebox.showerror("Error", f"Command '{saved_cmd}' not found")
+    
+    def _load_command_from_file(self):
+        """Load command from a text file"""
+        file = filedialog.askopenfilename(
+            title="Load FFmpeg Command",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if file:
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    command = f.read().strip()
+                self.cmd_text.delete("1.0", "end")
+                self.cmd_text.insert("1.0", command)
+                messagebox.showinfo("Loaded", "Command loaded from file")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load file: {str(e)}")
+    
+    def _save_command_to_file(self):
+        """Save command to a text file"""
+        command = self.cmd_text.get("1.0", "end-1c").strip()
+        if not command:
+            messagebox.showwarning("No Command", "No command to save")
+            return
+        
+        file = filedialog.asksaveasfilename(
+            title="Save FFmpeg Command",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if file:
+            try:
+                with open(file, 'w', encoding='utf-8') as f:
+                    f.write(command)
+                messagebox.showinfo("Saved", f"Command saved to {file}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save file: {str(e)}")
+    
+    def _reset_command(self):
+        """Reset command to generated from preset"""
+        if self.ffmpeg_translator:
+            self._update_command_preview()
+        else:
+            messagebox.showwarning("No Preset", "Load a HandBrake preset first to generate a command")
+    
+    def _delete_saved_command(self):
+        """Delete a saved command"""
+        saved_cmd = self.saved_cmd_var.get()
+        if not saved_cmd:
+            messagebox.showwarning("No Selection", "Please select a saved command to delete")
+            return
+        
+        if messagebox.askyesno("Confirm Delete", f"Delete saved command '{saved_cmd}'?"):
+            config.delete_ffmpeg_command(saved_cmd)
+            self._update_saved_commands_dropdown()
+            messagebox.showinfo("Deleted", f"Command '{saved_cmd}' deleted")
+    
+    def _update_saved_commands_dropdown(self):
+        """Update the saved commands dropdown"""
+        commands = config.get_saved_ffmpeg_commands()
+        if commands:
+            self.saved_cmd_dropdown.configure(values=list(commands.keys()))
+        else:
+            self.saved_cmd_dropdown.configure(values=[""])
+            self.saved_cmd_var.set("")
+    
+    def _on_saved_command_selected(self, choice):
+        """Handle saved command selection"""
+        if choice:
+            command = config.get_ffmpeg_command(choice)
+            if command:
+                self.cmd_text.delete("1.0", "end")
+                self.cmd_text.insert("1.0", command)
+    
+    def _insert_placeholder(self, placeholder: str):
+        """Insert a placeholder at the cursor position"""
+        try:
+            # Get cursor position
+            cursor_pos = self.cmd_text.index("insert")
+            # Insert the placeholder
+            self.cmd_text.insert(cursor_pos, placeholder)
+        except Exception:
+            # If cursor position fails, just append
+            self.cmd_text.insert("end", placeholder)
     
     def _start_encoding(self):
         """Start encoding process"""
-        if not self.preset_parser or not self.ffmpeg_translator:
-            messagebox.showwarning("No Preset", "Please load a HandBrake preset first")
+        # Check if there's a command (either from preset or edited)
+        command = self.cmd_text.get("1.0", "end-1c").strip()
+        if not command:
+            messagebox.showwarning("No Command", "Please load a preset or enter an FFmpeg command")
             return
         
         if not self.get_files_callback:
@@ -312,13 +559,17 @@ class FFmpegTab(ctk.CTkFrame):
                 if subtitle_file:
                     self._on_log("INFO", f"Extracted subtitle to: {subtitle_file}")
             
-            # Build FFmpeg command
-            ffmpeg_args = self.ffmpeg_translator.build_command(
-                input_file=source_file,
-                output_file=output_file,
-                audio_track=tracks["audio"],
-                subtitle_track=tracks.get("subtitle"),
-                subtitle_file=subtitle_file
+            # Get command from textbox (user may have edited it)
+            command_template = self.cmd_text.get("1.0", "end-1c").strip()
+            
+            # Replace placeholders in the command with actual file paths
+            ffmpeg_args = self._parse_and_substitute_command(
+                command_template,
+                source_file,
+                output_file,
+                tracks["audio"],
+                tracks.get("subtitle"),
+                subtitle_file
             )
             
             # Encode
@@ -373,6 +624,96 @@ class FFmpegTab(ctk.CTkFrame):
             if progress.speed:
                 status += f" - Speed: {progress.speed:.2f}x"
             self.progress_display.set_status(status)
+    
+    def _parse_and_substitute_command(
+        self,
+        command_template: str,
+        input_file: Path,
+        output_file: Path,
+        audio_track: int,
+        subtitle_track: Optional[int],
+        subtitle_file: Optional[Path]
+    ) -> List[str]:
+        """Parse command string and substitute placeholders with actual values"""
+        # Replace common placeholders
+        command = command_template
+        
+        # Replace input file placeholders
+        command = re.sub(r'\binput\.mkv\b', str(input_file), command, flags=re.IGNORECASE)
+        command = re.sub(r'\{INPUT\}', str(input_file), command)
+        command = re.sub(r'<INPUT>', str(input_file), command)
+        
+        # Replace output file placeholders
+        command = re.sub(r'\boutput\.mp4\b', str(output_file), command, flags=re.IGNORECASE)
+        command = re.sub(r'\{OUTPUT\}', str(output_file), command)
+        command = re.sub(r'<OUTPUT>', str(output_file), command)
+        
+        # Replace audio track placeholder
+        command = re.sub(r'\{AUDIO_TRACK\}', str(audio_track), command)
+        command = re.sub(r'<AUDIO_TRACK>', str(audio_track), command)
+        
+        # Replace subtitle track placeholder
+        if subtitle_track:
+            command = re.sub(r'\{SUBTITLE_TRACK\}', str(subtitle_track), command)
+            command = re.sub(r'<SUBTITLE_TRACK>', str(subtitle_track), command)
+        
+        # Replace subtitle file placeholder
+        if subtitle_file:
+            # Escape the path for use in filter
+            sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
+            sub_path = sub_path.replace("'", "'\\''")
+            command = re.sub(r'\{SUBTITLE_FILE\}', sub_path, command)
+            command = re.sub(r'<SUBTITLE_FILE>', sub_path, command)
+        
+        # If command still contains "input.mkv" or "output.mp4" as literal paths, replace them
+        # This handles the case where the preset generated command has placeholders
+        if "input.mkv" in command.lower() or "output.mp4" in command.lower():
+            # Try to find and replace the actual file paths in quotes
+            command = re.sub(r'"input\.mkv"', f'"{input_file}"', command, flags=re.IGNORECASE)
+            command = re.sub(r'"output\.mp4"', f'"{output_file}"', command, flags=re.IGNORECASE)
+            command = re.sub(r"'input\.mkv'", f"'{input_file}'", command, flags=re.IGNORECASE)
+            command = re.sub(r"'output\.mp4'", f"'{output_file}'", command, flags=re.IGNORECASE)
+        
+        # Parse the command string into a list of arguments
+        # Use shlex to properly handle quoted arguments
+        try:
+            args = shlex.split(command, posix=False)  # posix=False for Windows compatibility
+        except Exception:
+            # Fallback: simple split if shlex fails
+            args = command.split()
+        
+        # Find and replace input/output files in the parsed args
+        # Look for -i argument followed by input file, and last argument as output
+        input_replaced = False
+        for i, arg in enumerate(args):
+            if arg == "-i" and i + 1 < len(args):
+                # Check if next arg is a placeholder
+                next_arg = args[i + 1]
+                if "input.mkv" in next_arg.lower() or next_arg in ["{INPUT}", "<INPUT>", "input.mkv"]:
+                    args[i + 1] = str(input_file)
+                    input_replaced = True
+                elif not input_replaced:
+                    # If no placeholder found but we haven't replaced yet, replace it
+                    # This allows custom commands to work
+                    pass
+        
+        # Replace output file (usually the last argument)
+        if args:
+            last_arg = args[-1]
+            if "output.mp4" in last_arg.lower() or last_arg in ["{OUTPUT}", "<OUTPUT>", "output.mp4"]:
+                args[-1] = str(output_file)
+            # Also check if it's a quoted placeholder
+            elif '"output.mp4"' in last_arg.lower() or "'output.mp4'" in last_arg.lower():
+                args[-1] = f'"{output_file}"'
+        
+        # Replace "ffmpeg" with actual path if present
+        ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
+        for i, arg in enumerate(args):
+            if arg.lower() == "ffmpeg" or arg.endswith("ffmpeg.exe"):
+                args[i] = ffmpeg_path
+                break
+        
+        return args
     
     def _on_log(self, level: str, message: str):
         """Handle log message"""

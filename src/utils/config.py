@@ -175,6 +175,32 @@ class Config:
     def set_subtitle_exclude_patterns(self, patterns: list):
         """Set subtitle exclude patterns"""
         self.set("subtitle_exclude_patterns", patterns)
+    
+    def get_saved_ffmpeg_commands(self) -> dict:
+        """Get saved FFmpeg commands"""
+        return self.get("saved_ffmpeg_commands", {})
+    
+    def set_saved_ffmpeg_commands(self, commands: dict):
+        """Set saved FFmpeg commands"""
+        self.set("saved_ffmpeg_commands", commands)
+    
+    def save_ffmpeg_command(self, name: str, command: str):
+        """Save an FFmpeg command with a name"""
+        commands = self.get_saved_ffmpeg_commands()
+        commands[name] = command
+        self.set_saved_ffmpeg_commands(commands)
+    
+    def get_ffmpeg_command(self, name: str) -> Optional[str]:
+        """Get a saved FFmpeg command by name"""
+        commands = self.get_saved_ffmpeg_commands()
+        return commands.get(name)
+    
+    def delete_ffmpeg_command(self, name: str):
+        """Delete a saved FFmpeg command"""
+        commands = self.get_saved_ffmpeg_commands()
+        if name in commands:
+            del commands[name]
+            self.set_saved_ffmpeg_commands(commands)
 
 
 # Global config instance
