@@ -247,6 +247,27 @@ class SettingsTab(ctk.CTkFrame):
             "Tracks matching these patterns will be skipped even if they match language/name patterns."
         )
     
+    def _create_help_icon(self, parent, help_text: str):
+        """Create a help icon with tooltip"""
+        help_label = ctk.CTkLabel(
+            parent,
+            text="?",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color="gray",
+            cursor="hand2",
+            width=20
+        )
+        help_label.pack(side="left", padx=5)
+        
+        def show_help(event=None):
+            messagebox.showinfo("Help", help_text)
+        
+        help_label.bind("<Button-1>", show_help)
+        help_label.bind("<Enter>", lambda e: help_label.configure(text_color="blue"))
+        help_label.bind("<Leave>", lambda e: help_label.configure(text_color="gray"))
+        
+        return help_label
+    
     def _create_path_setting(self, parent, label, value, browse_cmd, auto_detect_cmd, help_text: str = None):
         """Create a path setting row"""
         frame = ctk.CTkFrame(parent)
