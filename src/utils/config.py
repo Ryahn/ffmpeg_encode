@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -10,7 +11,19 @@ class Config:
     """Manages application configuration"""
     
     def __init__(self):
-        self.config_dir = Path.home() / ".video_encoder"
+        # Use platform-appropriate config directory
+        if sys.platform == "win32":
+            # Windows: Use AppData\Local\VideoEncoder
+            appdata = os.getenv('LOCALAPPDATA')
+            if appdata:
+                self.config_dir = Path(appdata) / "VideoEncoder"
+            else:
+                # Fallback if LOCALAPPDATA is not set
+                self.config_dir = Path.home() / "AppData" / "Local" / "VideoEncoder"
+        else:
+            # macOS/Linux: Use ~/.video_encoder
+            self.config_dir = Path.home() / ".video_encoder"
+        
         self.config_file = self.config_dir / "config.json"
         self.config: Dict[str, Any] = {}
         self._load()
