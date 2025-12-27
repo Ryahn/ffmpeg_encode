@@ -20,6 +20,7 @@ class EncodingProgress:
         self.speed: Optional[float] = None
         self.eta: Optional[str] = None
         self.fps: Optional[float] = None
+        self.fps: Optional[float] = None
 
 
 class Encoder:
@@ -37,6 +38,7 @@ class Encoder:
         self.progress_callback = progress_callback
         self.log_callback = log_callback
         self._stop_event = threading.Event()
+        self._input_duration: Optional[float] = None  # Duration in seconds
     
     def encode_with_handbrake(
         self,
@@ -99,6 +101,9 @@ class Encoder:
     def _run_encoder(self, args: list, encoder_name: str, output_file: Path) -> bool:
         """Run the encoder process"""
         try:
+            # Reset duration for new encoding
+            self._input_duration = None
+            
             self._log("INFO", f"Starting {encoder_name} encoding...")
             # Format command for display (quote paths with spaces for readability)
             cmd_display = []
@@ -230,19 +235,63 @@ class Encoder:
         except Exception:
             pass
     
+    def _time_to_seconds(self, time_str: str) -> float:
+        """Convert time string (HH:MM:SS.mm) to seconds"""
+        try:
+            parts = time_str.split(':')
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = float(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        except (ValueError, IndexError):
+            return 0.0
+    
+    def _parse_duration_from_line(self, line: str) -> Optional[float]:
+        """Parse duration from FFmpeg output line like 'Duration: 00:23:45.67'"""
+        duration_match = re.search(r'Duration:\s*(\d{2}:\d{2}:\d{2}\.\d{2})', line)
+        if duration_match:
+            return self._time_to_seconds(duration_match.group(1))
+        return None
+    
     def _parse_progress(self, line: str, encoder_name: str):
         """Parse progress from encoder output"""
         progress = EncodingProgress()
         
         if encoder_name == "FFmpeg":
-            # Parse FFmpeg progress: time=00:00:05.12 speed=1.5x
+            # Try to extract duration from initial FFmpeg output
+            if self._input_duration is None:
+                duration = self._parse_duration_from_line(line)
+                if duration:
+                    self._input_duration = duration
+                    self._log("DEBUG", f"Detected video duration: {duration:.2f} seconds")
+            
+            # Parse FFmpeg progress: time=00:00:05.12 speed=1.5x fps=40.0
             time_match = re.search(r'time=(\d{2}:\d{2}:\d{2}\.\d{2})', line)
             speed_match = re.search(r'speed=\s*([\d.]+)x', line)
+            fps_match = re.search(r'fps=\s*([\d.]+)', line)
             
             if time_match:
                 progress.time = time_match.group(1)
+                current_time_sec = self._time_to_seconds(progress.time)
+                
+                # Calculate percentage if we have duration
+                if self._input_duration and self._input_duration > 0:
+                    progress.percent = min(100.0, (current_time_sec / self._input_duration) * 100.0)
+            
             if speed_match:
                 progress.speed = float(speed_match.group(1))
+                # Calculate ETA if we have both duration and current time
+                if time_match and self._input_duration and self._input_duration > 0:
+                    current_time_sec = self._time_to_seconds(progress.time)
+                    remaining_time_sec = (self._input_duration - current_time_sec) / progress.speed
+                    if remaining_time_sec > 0:
+                        hours = int(remaining_time_sec // 3600)
+                        minutes = int((remaining_time_sec % 3600) // 60)
+                        seconds = int(remaining_time_sec % 60)
+                        progress.eta = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            
+            if fps_match:
+                progress.fps = float(fps_match.group(1))
         
         elif encoder_name == "HandBrake":
             # Parse HandBrake progress: Encoding: task 1 of 1, 45.67 % (12.34 fps, avg 11.23 fps, ETA 00:05:30)
