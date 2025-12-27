@@ -26,15 +26,48 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
       
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --ignore-checksums
+          $env:PATH = "C:\Program Files (x86)\Inno Setup 6;$env:PATH"
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
+      
+      - name: Extract version from tag
+        id: tag_version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like "refs/tags/*") {
+            $version = $env:GITHUB_REF -replace "refs/tags/v", ""
+            $version = $version -replace "^v", ""
+          } else {
+            $version = "dev"
+          }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "Version: $version"
+      
       - name: Build executable
         run: |
           pyinstaller build.spec
       
-      - name: Upload Windows artifact
+      - name: Create portable package
+        run: |
+          mkdir dist_portable
+          copy dist\ffmpeg_encode.exe dist_portable\ffmpeg_encode-portable.exe
+      
+      - name: Create installer
+        shell: pwsh
+        run: |
+          $version = "${{ steps.tag_version.outputs.version }}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=$version build_installer.iss
+      
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg_encode-Windows
-          path: dist/ffmpeg_encode.exe
+          path: |
+            dist_portable/ffmpeg_encode-portable.exe
+            dist_installer/ffmpeg_encode-Setup.exe
           retention-days: 30
   
   build-macos:
@@ -56,24 +89,72 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
       
+      - name: Extract version from tag
+        id: tag_version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=${VERSION#v}  # Remove 'v' prefix if present
+          else
+            VERSION="dev"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
       - name: Build executable
         run: |
           pyinstaller build.spec
       
-      - name: Create DMG (optional)
+      - name: Create .app bundle structure
         run: |
-          # Create a simple DMG structure
+          VERSION="${{ steps.tag_version.outputs.version }}"
+          mkdir -p dist_app/ffmpeg_encode.app/Contents/MacOS
+          mkdir -p dist_app/ffmpeg_encode.app/Contents/Resources
+          cp dist/ffmpeg_encode dist_app/ffmpeg_encode.app/Contents/MacOS/ffmpeg_encode
+          chmod +x dist_app/ffmpeg_encode.app/Contents/MacOS/ffmpeg_encode
+          # Create Info.plist with version
+          cat > dist_app/ffmpeg_encode.app/Contents/Info.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>ffmpeg_encode</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.ffmpegencode.app</string>
+              <key>CFBundleName</key>
+              <string>ffmpeg_encode</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$VERSION</string>
+              <key>CFBundleVersion</key>
+              <string>$VERSION</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.13</string>
+          </dict>
+          </plist>
+          EOF
+      
+      - name: Create DMG
+        run: |
           mkdir -p dmg_package
-          cp dist/ffmpeg_encode dmg_package/
+          cp -R dist_app/ffmpeg_encode.app dmg_package/
           hdiutil create -volname "ffmpeg_encode" -srcfolder dmg_package -ov -format UDZO dist/ffmpeg_encode.dmg || true
       
-      - name: Upload macOS artifact
+      - name: Create ZIP with .app
+        run: |
+          cd dist_app
+          zip -r ../dist/ffmpeg_encode.zip ffmpeg_encode.app
+          cd ..
+      
+      - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg_encode-macOS
           path: |
-            dist/ffmpeg_encode
             dist/ffmpeg_encode.dmg
+            dist/ffmpeg_encode.zip
           retention-days: 30
           if-no-files-found: warn
   
