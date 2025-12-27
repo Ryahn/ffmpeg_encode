@@ -81,6 +81,10 @@ class Encoder:
             self._log("INFO", f"DRY RUN: Would encode {input_file} to {output_file}")
             return True
         
+        if not ffmpeg_args:
+            self._log("ERROR", "FFmpeg args list is empty")
+            return False
+        
         # Replace placeholder paths in args
         args = []
         for arg in ffmpeg_args:
@@ -89,6 +93,7 @@ class Encoder:
             else:
                 args.append(arg)
         
+        self._log("INFO", f"Prepared FFmpeg command with {len(args)} arguments")
         return self._run_encoder(args, "FFmpeg", output_file)
     
     def _run_encoder(self, args: list, encoder_name: str, output_file: Path) -> bool:
@@ -97,14 +102,33 @@ class Encoder:
             self._log("INFO", f"Starting {encoder_name} encoding...")
             self._log("INFO", f"Command: {' '.join(args)}")
             
-            process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
+            # Check if encoder executable exists
+            encoder_exe = args[0] if args else None
+            if encoder_exe and not encoder_exe.startswith("ffmpeg") and not Path(encoder_exe).exists():
+                self._log("ERROR", f"Encoder executable not found: {encoder_exe}")
+                return False
+            
+            self._log("INFO", f"Launching {encoder_name} process...")
+            try:
+                process = subprocess.Popen(
+                    args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                    shell=False
+                )
+                self._log("INFO", f"Process started (PID: {process.pid})")
+            except FileNotFoundError as e:
+                self._log("ERROR", f"Encoder executable not found: {args[0] if args else 'unknown'}")
+                self._log("ERROR", f"Error details: {str(e)}")
+                return False
+            except Exception as e:
+                self._log("ERROR", f"Failed to start subprocess: {str(e)}")
+                import traceback
+                self._log("ERROR", f"Traceback: {traceback.format_exc()}")
+                return False
             
             # Start threads to read output
             stdout_queue = Queue()
@@ -127,6 +151,7 @@ class Encoder:
             # Process output in real-time
             while process.poll() is None:
                 if self._stop_event.is_set():
+                    self._log("INFO", "Stop event set, terminating process...")
                     process.terminate()
                     process.wait(timeout=5)
                     if process.poll() is None:
@@ -147,17 +172,29 @@ class Encoder:
                 time.sleep(0.1)
             
             # Get remaining output
-            stdout_thread.join(timeout=1)
-            stderr_thread.join(timeout=1)
+            self._log("INFO", f"Process finished with return code: {process.returncode}")
+            stdout_thread.join(timeout=2)
+            stderr_thread.join(timeout=2)
             
             while not stdout_queue.empty():
                 line = stdout_queue.get()
                 self._log("INFO", f"[{encoder_name}] {line}")
             
+            # Collect all stderr output (including errors)
+            stderr_lines = []
             while not stderr_queue.empty():
                 line = stderr_queue.get()
+                stderr_lines.append(line)
                 self._parse_progress(line, encoder_name)
                 self._log("DEBUG", f"[{encoder_name}] {line}")
+            
+            # If process failed, log all stderr as error
+            if process.returncode != 0:
+                error_output = '\n'.join(stderr_lines)
+                if error_output:
+                    self._log("ERROR", f"{encoder_name} error output:\n{error_output}")
+                self._log("ERROR", f"{encoder_name} exited with code {process.returncode}")
+                return False
             
             if process.returncode == 0:
                 # Wait for output file to be created (with retry)
@@ -173,6 +210,8 @@ class Encoder:
                 
         except Exception as e:
             self._log("ERROR", f"Error encoding: {str(e)}")
+            import traceback
+            self._log("ERROR", f"Traceback: {traceback.format_exc()}")
             return False
     
     def _read_output(self, pipe, queue: Queue):

@@ -545,6 +545,10 @@ class FFmpegTab(ctk.CTkFrame):
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         
+        # Reset encoder stop event
+        if self.encoder:
+            self.encoder.reset_stop_event()
+        
         # Start encoding in thread
         self.encoding_thread = threading.Thread(
             target=self._encode_files,
@@ -619,25 +623,56 @@ class FFmpegTab(ctk.CTkFrame):
             
             # Get command from textbox (user may have edited it)
             command_template = self.cmd_text.get("1.0", "end-1c").strip()
+            if not command_template:
+                self._on_log("ERROR", "No FFmpeg command found in textbox")
+                file_data["status"] = "Error"
+                if self.update_file_callback:
+                    self.update_file_callback(i, file_data)
+                continue
+            
+            self._on_log("INFO", f"Parsing FFmpeg command...")
             
             # Replace placeholders in the command with actual file paths
-            ffmpeg_args = self._parse_and_substitute_command(
-                command_template,
-                source_file,
-                output_file,
-                tracks["audio"],
-                tracks.get("subtitle"),
-                subtitle_file
-            )
+            try:
+                ffmpeg_args = self._parse_and_substitute_command(
+                    command_template,
+                    source_file,
+                    output_file,
+                    tracks["audio"],
+                    tracks.get("subtitle"),
+                    subtitle_file
+                )
+                if not ffmpeg_args:
+                    self._on_log("ERROR", "Command parsing resulted in empty arguments")
+                    file_data["status"] = "Error"
+                    if self.update_file_callback:
+                        self.update_file_callback(i, file_data)
+                    continue
+                self._on_log("INFO", f"Command parsed successfully ({len(ffmpeg_args)} arguments)")
+            except Exception as e:
+                self._on_log("ERROR", f"Failed to parse command: {str(e)}")
+                import traceback
+                self._on_log("ERROR", f"Traceback: {traceback.format_exc()}")
+                file_data["status"] = "Error"
+                if self.update_file_callback:
+                    self.update_file_callback(i, file_data)
+                continue
             
             # Encode
-            success = self.encoder.encode_with_ffmpeg(
-                input_file=source_file,
-                output_file=output_file,
-                ffmpeg_args=ffmpeg_args,
-                subtitle_file=subtitle_file,
-                dry_run=dry_run
-            )
+            self._on_log("INFO", f"Starting encoding to: {output_file.name}")
+            try:
+                success = self.encoder.encode_with_ffmpeg(
+                    input_file=source_file,
+                    output_file=output_file,
+                    ffmpeg_args=ffmpeg_args,
+                    subtitle_file=subtitle_file,
+                    dry_run=dry_run
+                )
+            except Exception as e:
+                self._on_log("ERROR", f"Encoding failed with exception: {str(e)}")
+                import traceback
+                self._on_log("ERROR", f"Traceback: {traceback.format_exc()}")
+                success = False
             
             # Clean up subtitle file
             if subtitle_file and subtitle_file.exists():

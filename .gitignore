@@ -53,3 +53,4 @@ build/
 
 appletv_1080p30.json
 encode-mkv-files.ps1
+build_logs/
