@@ -731,15 +731,38 @@ class FFmpegTab(ctk.CTkFrame):
         # Replace common placeholders
         command = command_template
         
+        # Helper function to escape backslashes for regex replacement
+        # Windows paths like C:\Users need backslashes escaped to avoid \U being interpreted as Unicode escape
+        def escape_for_replacement(path_str: str) -> str:
+            return path_str.replace('\\', '\\\\')
+        
+        # Helper function to quote paths with spaces for command string
+        def quote_path_if_needed(path_str: str) -> str:
+            """Quote path if it contains spaces, for proper shlex.split() handling"""
+            if ' ' in path_str:
+                return f'"{path_str}"'
+            return path_str
+        
+        input_file_str = str(input_file)
+        output_file_str = str(output_file)
+        
+        # Quote paths with spaces
+        input_file_quoted = quote_path_if_needed(input_file_str)
+        output_file_quoted = quote_path_if_needed(output_file_str)
+        
+        # Escape backslashes for regex replacement
+        input_file_escaped = escape_for_replacement(input_file_quoted)
+        output_file_escaped = escape_for_replacement(output_file_quoted)
+        
         # Replace input file placeholders
-        command = re.sub(r'\binput\.mkv\b', str(input_file), command, flags=re.IGNORECASE)
-        command = re.sub(r'\{INPUT\}', str(input_file), command)
-        command = re.sub(r'<INPUT>', str(input_file), command)
+        command = re.sub(r'\binput\.mkv\b', input_file_escaped, command, flags=re.IGNORECASE)
+        command = re.sub(r'\{INPUT\}', input_file_escaped, command)
+        command = re.sub(r'<INPUT>', input_file_escaped, command)
         
         # Replace output file placeholders
-        command = re.sub(r'\boutput\.mp4\b', str(output_file), command, flags=re.IGNORECASE)
-        command = re.sub(r'\{OUTPUT\}', str(output_file), command)
-        command = re.sub(r'<OUTPUT>', str(output_file), command)
+        command = re.sub(r'\boutput\.mp4\b', output_file_escaped, command, flags=re.IGNORECASE)
+        command = re.sub(r'\{OUTPUT\}', output_file_escaped, command)
+        command = re.sub(r'<OUTPUT>', output_file_escaped, command)
         
         # Replace audio track placeholder
         command = re.sub(r'\{AUDIO_TRACK\}', str(audio_track), command)
@@ -752,57 +775,41 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Replace subtitle file placeholder
         if subtitle_file:
-            # Escape the path for use in filter
+            # Escape the path for use in filter (convert to forward slashes for FFmpeg filters)
+            # After converting \ to /, there are no backslashes left except \: which we need to escape for regex
             sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
             sub_path = sub_path.replace("'", "'\\''")
-            command = re.sub(r'\{SUBTITLE_FILE\}', sub_path, command)
-            command = re.sub(r'<SUBTITLE_FILE>', sub_path, command)
+            # Escape the backslash in \: for regex replacement (becomes \\: which regex will interpret as \:)
+            sub_path_escaped = sub_path.replace('\\', '\\\\')
+            command = re.sub(r'\{SUBTITLE_FILE\}', sub_path_escaped, command)
+            command = re.sub(r'<SUBTITLE_FILE>', sub_path_escaped, command)
         
         # If command still contains "input.mkv" or "output.mp4" as literal paths, replace them
-        # This handles the case where the preset generated command has placeholders
+        # This handles the case where the preset generated command has placeholders in quotes
         if "input.mkv" in command.lower() or "output.mp4" in command.lower():
             # Try to find and replace the actual file paths in quotes
-            command = re.sub(r'"input\.mkv"', f'"{input_file}"', command, flags=re.IGNORECASE)
-            command = re.sub(r'"output\.mp4"', f'"{output_file}"', command, flags=re.IGNORECASE)
-            command = re.sub(r"'input\.mkv'", f"'{input_file}'", command, flags=re.IGNORECASE)
-            command = re.sub(r"'output\.mp4'", f"'{output_file}'", command, flags=re.IGNORECASE)
+            # Use the already-quoted versions we created earlier
+            command = re.sub(r'"input\.mkv"', input_file_escaped, command, flags=re.IGNORECASE)
+            command = re.sub(r'"output\.mp4"', output_file_escaped, command, flags=re.IGNORECASE)
+            # For single quotes, we still need to quote the paths
+            input_single_quoted = escape_for_replacement(f"'{input_file_str}'")
+            output_single_quoted = escape_for_replacement(f"'{output_file_str}'")
+            command = re.sub(r"'input\.mkv'", input_single_quoted, command, flags=re.IGNORECASE)
+            command = re.sub(r"'output\.mp4'", output_single_quoted, command, flags=re.IGNORECASE)
         
         # Parse the command string into a list of arguments
         # Use shlex to properly handle quoted arguments
+        # Note: shlex.split() will automatically unquote paths, so paths with spaces will be correctly parsed as single arguments
         try:
             args = shlex.split(command, posix=False)  # posix=False for Windows compatibility
         except Exception:
-            # Fallback: simple split if shlex fails
+            # Fallback: simple split if shlex fails (but this won't handle spaces correctly)
             args = command.split()
         
-        # Find and replace input/output files in the parsed args
-        # Look for -i argument followed by input file, and last argument as output
-        input_replaced = False
-        for i, arg in enumerate(args):
-            if arg == "-i" and i + 1 < len(args):
-                # Check if next arg is a placeholder
-                next_arg = args[i + 1]
-                if "input.mkv" in next_arg.lower() or next_arg in ["{INPUT}", "<INPUT>", "input.mkv"]:
-                    args[i + 1] = str(input_file)
-                    input_replaced = True
-                elif not input_replaced:
-                    # If no placeholder found but we haven't replaced yet, replace it
-                    # This allows custom commands to work
-                    pass
-        
-        # Replace output file (usually the last argument)
-        if args:
-            last_arg = args[-1]
-            if "output.mp4" in last_arg.lower() or last_arg in ["{OUTPUT}", "<OUTPUT>", "output.mp4"]:
-                args[-1] = str(output_file)
-            # Also check if it's a quoted placeholder
-            elif '"output.mp4"' in last_arg.lower() or "'output.mp4'" in last_arg.lower():
-                args[-1] = f'"{output_file}"'
-        
-        # Replace "ffmpeg" with actual path if present
+        # Replace "ffmpeg" with actual path if present (this should already be done, but just in case)
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
         for i, arg in enumerate(args):
-            if arg.lower() == "ffmpeg" or arg.endswith("ffmpeg.exe"):
+            if arg.lower() == "ffmpeg" or (arg.lower().endswith("ffmpeg.exe") and "ffmpeg" in arg.lower()):
                 args[i] = ffmpeg_path
                 break
         
