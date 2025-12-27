@@ -33,8 +33,8 @@ jobs:
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VideoEncoder-Windows
-          path: dist/VideoEncoder.exe
+          name: ffmpeg_encode-Windows
+          path: dist/ffmpeg_encode.exe
           retention-days: 30
   
   build-macos:
@@ -64,16 +64,16 @@ jobs:
         run: |
           # Create a simple DMG structure
           mkdir -p dmg_package
-          cp dist/VideoEncoder dmg_package/
-          hdiutil create -volname "VideoEncoder" -srcfolder dmg_package -ov -format UDZO dist/VideoEncoder.dmg || true
+          cp dist/ffmpeg_encode dmg_package/
+          hdiutil create -volname "ffmpeg_encode" -srcfolder dmg_package -ov -format UDZO dist/ffmpeg_encode.dmg || true
       
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VideoEncoder-macOS
+          name: ffmpeg_encode-macOS
           path: |
-            dist/VideoEncoder
-            dist/VideoEncoder.dmg
+            dist/ffmpeg_encode
+            dist/ffmpeg_encode.dmg
           retention-days: 30
           if-no-files-found: warn
   
@@ -92,13 +92,13 @@ jobs:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: VideoEncoder-Windows
+          name: ffmpeg_encode-Windows
           path: release/
       
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: VideoEncoder-macOS
+          name: ffmpeg_encode-macOS
           path: release/
       
       - name: Create Release
