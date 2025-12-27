@@ -82,6 +82,8 @@ jobs:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write  # Required to create releases
     
     steps:
       - name: Checkout code
