@@ -174,13 +174,25 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ffmpeg_encode-Windows
-          path: release/
+          path: release_temp/
       
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
           name: ffmpeg_encode-macOS
-          path: release/
+          path: release_temp/
+      
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          # Copy Windows files (flatten directory structure)
+          find release_temp -name "ffmpeg_encode-portable.exe" -exec cp {} release/ \;
+          find release_temp -name "ffmpeg_encode-Setup.exe" -exec cp {} release/ \;
+          # Copy macOS files
+          find release_temp -name "ffmpeg_encode.dmg" -exec cp {} release/ \;
+          find release_temp -name "ffmpeg_encode.zip" -exec cp {} release/ \;
+          # List files to verify
+          ls -la release/
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
