@@ -46,6 +46,10 @@ logs/
 *.app
 dist/
 build/
+*.spec.bak
+
+# Keep build.spec in repo
+!build.spec
 
 appletv_1080p30.json
 encode-mkv-files.ps1
