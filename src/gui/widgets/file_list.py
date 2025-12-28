@@ -30,6 +30,7 @@ class FileListWidget(ctk.CTkFrame):
         header_frame = ctk.CTkFrame(self.scrollable_frame)
         header_frame.pack(fill="x", pady=(0, 5))
         
+        ctk.CTkLabel(header_frame, text="", width=30, anchor="w").pack(side="left", padx=5)  # Checkbox column
         ctk.CTkLabel(header_frame, text="Source Path", width=300, anchor="w").pack(side="left", padx=5)
         ctk.CTkLabel(header_frame, text="Size", width=100, anchor="w").pack(side="left", padx=5)
         ctk.CTkLabel(header_frame, text="Tracks", width=100, anchor="w").pack(side="left", padx=5)
@@ -61,7 +62,8 @@ class FileListWidget(ctk.CTkFrame):
             "subtitle_track": None,
             "status": self.STATUS_PENDING,
             "output_path": None,
-            "output_size": None
+            "output_size": None,
+            "selected": False
         }
         
         self.files.append(file_data)
@@ -72,6 +74,18 @@ class FileListWidget(ctk.CTkFrame):
         """Add a file row to the display"""
         row_frame = ctk.CTkFrame(self.scrollable_frame)
         row_frame.pack(fill="x", pady=2)
+        
+        # Checkbox for selection
+        checkbox_var = ctk.BooleanVar(value=file_data.get("selected", False))
+        # Use a lambda with default argument to properly capture the index
+        checkbox = ctk.CTkCheckBox(
+            row_frame,
+            text="",
+            variable=checkbox_var,
+            width=30,
+            command=lambda idx=index, var=checkbox_var: self._on_checkbox_toggle(idx, var)
+        )
+        checkbox.pack(side="left", padx=5)
         
         # Source path
         path_label = ctk.CTkLabel(
@@ -121,12 +135,19 @@ class FileListWidget(ctk.CTkFrame):
         
         # Store references
         file_data["_row_frame"] = row_frame
+        file_data["_checkbox"] = checkbox
+        file_data["_checkbox_var"] = checkbox_var
         file_data["_path_label"] = path_label
         file_data["_size_label"] = size_label
         file_data["_track_label"] = track_label
         file_data["_status_label"] = status_label
         
         self.file_frames.append(row_frame)
+    
+    def _on_checkbox_toggle(self, index: int, checkbox_var: ctk.BooleanVar):
+        """Handle checkbox toggle"""
+        if 0 <= index < len(self.files):
+            self.files[index]["selected"] = checkbox_var.get()
     
     def update_file(self, index: int, **kwargs):
         """Update file data"""
@@ -182,6 +203,18 @@ class FileListWidget(ctk.CTkFrame):
                 file_data["_row_frame"].destroy()
             self.files.pop(index)
             self.file_frames.pop(index)
+            # Rebuild indices for remaining checkboxes
+            self._rebuild_checkbox_commands()
+    
+    def _rebuild_checkbox_commands(self):
+        """Rebuild checkbox commands after files are removed"""
+        for index, file_data in enumerate(self.files):
+            if "_checkbox" in file_data and "_checkbox_var" in file_data:
+                # Capture index and var in lambda default arguments to avoid closure issues
+                checkbox_var = file_data["_checkbox_var"]
+                file_data["_checkbox"].configure(
+                    command=lambda idx=index, var=checkbox_var: self._on_checkbox_toggle(idx, var)
+                )
     
     def clear(self):
         """Clear all files"""
@@ -198,4 +231,34 @@ class FileListWidget(ctk.CTkFrame):
     def get_file_count(self) -> int:
         """Get number of files"""
         return len(self.files)
+    
+    def get_selected_indices(self) -> List[int]:
+        """Get indices of selected files"""
+        return [i for i, file_data in enumerate(self.files) if file_data.get("selected", False)]
+    
+    def remove_selected_files(self) -> int:
+        """Remove all selected files from the list. Returns number of files removed."""
+        selected_indices = self.get_selected_indices()
+        if not selected_indices:
+            return 0
+        
+        # Remove in reverse order to preserve indices
+        for index in sorted(selected_indices, reverse=True):
+            self.remove_file(index)
+        
+        return len(selected_indices)
+    
+    def select_all(self):
+        """Select all files"""
+        for file_data in self.files:
+            file_data["selected"] = True
+            if "_checkbox_var" in file_data:
+                file_data["_checkbox_var"].set(True)
+    
+    def deselect_all(self):
+        """Deselect all files"""
+        for file_data in self.files:
+            file_data["selected"] = False
+            if "_checkbox_var" in file_data:
+                file_data["_checkbox_var"].set(False)
 

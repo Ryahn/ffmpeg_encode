@@ -170,8 +170,13 @@ class FilesTab(ctk.CTkFrame):
     
     def _remove_selected(self):
         """Remove selected files"""
-        # For now, remove all (selection not implemented)
-        messagebox.showinfo("Info", "Selection not yet implemented. Use Clear All.")
+        selected_count = self.file_list.remove_selected_files()
+        if selected_count > 0:
+            if self.on_files_changed:
+                self.on_files_changed()
+            messagebox.showinfo("Files Removed", f"Removed {selected_count} file(s) from the list.")
+        else:
+            messagebox.showwarning("No Selection", "Please select one or more files to remove.")
     
     def _clear_all(self):
         """Clear all files"""
