@@ -10,6 +10,7 @@ from .tabs.handbrake_tab import HandBrakeTab
 from .tabs.ffmpeg_tab import FFmpegTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.debug_tab import DebugTab
+from .tabs.about_tab import AboutTab
 from core.package_manager import PackageManager
 from utils.config import config
 from utils.logger import logger
@@ -78,6 +79,12 @@ class MainWindow(ctk.CTk):
         tab_frame = self.tabview.tab("Debug")
         self.debug_tab = DebugTab(tab_frame)
         self.debug_tab.pack(fill="both", expand=True)
+        
+        # About tab
+        self.tabview.add("About")
+        tab_frame = self.tabview.tab("About")
+        self.about_tab = AboutTab(tab_frame)
+        self.about_tab.pack(fill="both", expand=True)
         
         # Status bar
         self.status_bar = ctk.CTkLabel(
