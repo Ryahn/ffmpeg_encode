@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Tuple, List
 import shutil
@@ -20,12 +21,17 @@ class TrackAnalyzer:
         if not self.mkvinfo_path:
             return None
         try:
-            result = subprocess.run(
-                [self.mkvinfo_path, str(file_path)],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            # Hide console window on Windows (for release builds)
+            run_kwargs = {
+                'args': [self.mkvinfo_path, str(file_path)],
+                'capture_output': True,
+                'text': True,
+                'timeout': 30
+            }
+            if sys.platform == 'win32':
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
+            result = subprocess.run(**run_kwargs)
             if result.returncode == 0:
                 return result.stdout
             return result.stderr
@@ -52,12 +58,17 @@ class TrackAnalyzer:
     def _analyze_mkv_tracks(self, file_path: Path) -> Dict[str, Optional[int]]:
         """Analyze MKV tracks using mkvinfo"""
         try:
-            result = subprocess.run(
-                [self.mkvinfo_path, str(file_path)],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            # Hide console window on Windows (for release builds)
+            run_kwargs = {
+                'args': [self.mkvinfo_path, str(file_path)],
+                'capture_output': True,
+                'text': True,
+                'timeout': 30
+            }
+            if sys.platform == 'win32':
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
+            result = subprocess.run(**run_kwargs)
             
             if result.returncode != 0:
                 return {"audio": None, "subtitle": None, "error": "mkvinfo failed"}

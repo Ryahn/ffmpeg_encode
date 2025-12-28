@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+import sys
 import threading
 import time
 import os
@@ -122,15 +123,20 @@ class Encoder:
             
             self._log("INFO", f"Launching {encoder_name} process...")
             try:
-                process = subprocess.Popen(
-                    args,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    bufsize=1,
-                    universal_newlines=True,
-                    shell=False
-                )
+                # Hide console window on Windows (for release builds)
+                popen_kwargs = {
+                    'args': args,
+                    'stdout': subprocess.PIPE,
+                    'stderr': subprocess.PIPE,
+                    'text': True,
+                    'bufsize': 1,
+                    'universal_newlines': True,
+                    'shell': False
+                }
+                if sys.platform == 'win32':
+                    popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+                
+                process = subprocess.Popen(**popen_kwargs)
                 self._log("INFO", f"Process started (PID: {process.pid})")
             except FileNotFoundError as e:
                 self._log("ERROR", f"Encoder executable not found: {args[0] if args else 'unknown'}")
@@ -361,12 +367,17 @@ def extract_subtitle_stream(
             str(output_file)
         ]
         
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        # Hide console window on Windows (for release builds)
+        run_kwargs = {
+            'args': args,
+            'capture_output': True,
+            'text': True,
+            'timeout': 30
+        }
+        if sys.platform == 'win32':
+            run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        
+        result = subprocess.run(**run_kwargs)
         
         if result.returncode == 0 and output_file.exists():
             # Verify file is not empty

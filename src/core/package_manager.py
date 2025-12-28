@@ -148,12 +148,17 @@ class PackageManager:
                 return False, "Chocolatey is not installed. Please install it from https://chocolatey.org/"
             
             # Install package
-            result = subprocess.run(
-                [choco, "install", package, "-y"],
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minute timeout
-            )
+            # Hide console window on Windows (for release builds)
+            run_kwargs = {
+                'args': [choco, "install", package, "-y"],
+                'capture_output': True,
+                'text': True,
+                'timeout': 600  # 10 minute timeout
+            }
+            if sys.platform == 'win32':
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
+            result = subprocess.run(**run_kwargs)
             
             if result.returncode == 0:
                 return True, f"Successfully installed {package}"
@@ -173,12 +178,17 @@ class PackageManager:
                 return False, "Homebrew is not installed. Please install it from https://brew.sh/"
             
             # Install package
-            result = subprocess.run(
-                [brew, "install", package],
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minute timeout
-            )
+            # Hide console window on Windows (for release builds)
+            run_kwargs = {
+                'args': [brew, "install", package],
+                'capture_output': True,
+                'text': True,
+                'timeout': 600  # 10 minute timeout
+            }
+            if sys.platform == 'win32':
+                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
+            result = subprocess.run(**run_kwargs)
             
             if result.returncode == 0:
                 return True, f"Successfully installed {package}"
