@@ -1,5 +1,6 @@
 """Main application window"""
 
+import sys
 import customtkinter as ctk
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,9 @@ class MainWindow(ctk.CTk):
         # Configure window
         self.title("Video Encoder")
         self.geometry("1200x800")
+        
+        # Set window icon
+        self._set_icon()
         
         # Set appearance
         ctk.set_appearance_mode("dark")
@@ -85,6 +89,21 @@ class MainWindow(ctk.CTk):
         
         # Update status
         self._update_status()
+    
+    def _set_icon(self):
+        """Set the window icon"""
+        try:
+            if getattr(sys, 'frozen', False):
+                # Running as a bundled executable
+                icon_path = Path(sys._MEIPASS) / 'gui' / 'icon.ico'
+            else:
+                # Running as a normal Python script
+                icon_path = Path(__file__).parent / 'icon.ico'
+            
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))
+        except Exception as e:
+            logger.warning(f"Could not set window icon: {e}")
     
     def _check_dependencies(self):
         """Check for required dependencies"""

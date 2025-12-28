@@ -7,6 +7,7 @@ AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\ffmpeg_encode
 DefaultGroupName=ffmpeg_encode
 UninstallDisplayIcon={app}\ffmpeg_encode.exe
+SetupIconFile=src\gui\icon.ico
 Compression=lzma2
 SolidCompression=yes
 OutputDir=dist_installer

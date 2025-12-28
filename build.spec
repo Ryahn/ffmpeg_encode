@@ -6,7 +6,7 @@ a = Analysis(
     ['src/main.py'],
     pathex=['src'],
     binaries=[],
-    datas=[],
+    datas=[('src/gui/icon.ico', 'gui')],
     hiddenimports=[
         'customtkinter',
         'PIL',
@@ -71,5 +71,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='src/gui/icon.ico',
 )
 
