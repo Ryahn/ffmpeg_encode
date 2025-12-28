@@ -59,9 +59,14 @@ class FFmpegTranslator:
         # Add subtitle filter if needed
         if subtitle_file:
             # Escape the subtitle file path for use in filter
+            # Use forward slashes and escape colon for Windows paths
             sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
             sub_path = sub_path.replace("'", "'\\''")
             video_filters.append(f"subtitles='{sub_path}'")
+        elif subtitle_track:
+            # Include subtitle filter with placeholder that will be replaced during encoding
+            # Use {SUBTITLE_FILE} placeholder which will be replaced with actual extracted subtitle file
+            video_filters.append("subtitles='{SUBTITLE_FILE}'")
         
         if video_filters:
             cmd.extend(["-vf", ",".join(video_filters)])

@@ -369,12 +369,27 @@ def extract_subtitle_stream(
         )
         
         if result.returncode == 0 and output_file.exists():
-            return output_file
+            # Verify file is not empty
+            if output_file.stat().st_size > 0:
+                return output_file
+            else:
+                # Empty file, remove it
+                output_file.unlink()
+                return None
         else:
+            # Log extraction failure
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Subtitle extraction failed: returncode={result.returncode}")
+            if result.stderr:
+                logger.error(f"FFmpeg error: {result.stderr}")
             if output_file.exists():
                 output_file.unlink()
             return None
-    except Exception:
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Subtitle extraction exception: {e}")
         if output_file.exists():
             output_file.unlink()
         return None

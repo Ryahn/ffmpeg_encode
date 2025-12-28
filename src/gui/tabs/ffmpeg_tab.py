@@ -63,6 +63,13 @@ class FFmpegTab(ctk.CTkFrame):
             width=100
         ).pack(side="left", padx=5)
         
+        ctk.CTkButton(
+            preset_frame,
+            text="Detect Tracks",
+            command=self._detect_and_update_tracks,
+            width=120
+        ).pack(side="left", padx=5)
+        
         # Command editor
         cmd_frame = ctk.CTkFrame(scrollable)
         cmd_frame.pack(fill="x", pady=10)
@@ -471,17 +478,144 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Use audio_track=2 as placeholder (represents track ID 1, which would map to stream 1)
         # This gives a more realistic preview. The actual track will be detected during encoding.
+        # Check if we can detect subtitle track from first file for better preview
+        subtitle_track_preview = None
+        if self.get_files_callback:
+            files = self.get_files_callback()
+            if files and len(files) > 0:
+                first_file_data = files[0]
+                subtitle_track_preview = first_file_data.get("subtitle_track")
+                # If not in file data, try to analyze
+                if subtitle_track_preview is None and self.track_analyzer:
+                    try:
+                        source_file = Path(first_file_data["path"])
+                        tracks = self.track_analyzer.analyze_tracks(source_file)
+                        if not tracks.get("error"):
+                            subtitle_track_preview = tracks.get("subtitle")
+                    except Exception:
+                        pass
+        
         cmd = self.ffmpeg_translator.get_command_string(
             input_file=placeholder_input,
             output_file=placeholder_output,
             audio_track=2,  # Track ID 1 + 1 = 2, which maps to stream 1
-            subtitle_track=None
+            subtitle_track=subtitle_track_preview
         )
         
         self.cmd_text.delete("1.0", "end")
         self.cmd_text.insert("1.0", cmd)
         # Update preview after command is updated
         self._update_command_preview_display()
+    
+    def _detect_and_update_tracks(self):
+        """Detect tracks from first file and update command"""
+        if not self.ffmpeg_translator:
+            messagebox.showwarning("No Preset", "Please load a HandBrake preset first")
+            return
+        
+        if not self.get_files_callback:
+            messagebox.showwarning("No Files", "No files available. Please add files to the file list first.")
+            return
+        
+        files = self.get_files_callback()
+        if not files or len(files) == 0:
+            messagebox.showwarning("No Files", "No files in the file list. Please add files first.")
+            return
+        
+        # Get first file
+        first_file_data = files[0]
+        source_file = Path(first_file_data["path"])
+        
+        if not source_file.exists():
+            messagebox.showerror("File Not Found", f"File not found: {source_file}")
+            return
+        
+        # Show progress
+        self._on_log("INFO", f"Analyzing tracks for: {source_file.name}")
+        
+        # Analyze tracks
+        if not self.track_analyzer:
+            messagebox.showerror("No Analyzer", "Track analyzer not available. Please check mkvinfo installation.")
+            return
+        
+        try:
+            tracks = self.track_analyzer.analyze_tracks(source_file)
+            
+            if tracks.get("error"):
+                messagebox.showerror("Analysis Failed", f"Track analysis failed: {tracks['error']}")
+                return
+            
+            audio_track = tracks.get("audio")
+            subtitle_track = tracks.get("subtitle")
+            
+            # Fix: If subtitle track wasn't detected but should have been, find it manually
+            # This is a workaround for a bug in the track analyzer where it doesn't always detect subtitles correctly
+            if not subtitle_track and tracks.get("all_tracks"):
+                for track in tracks["all_tracks"]:
+                    if track["type"] == "subtitles":
+                        is_eng = self.track_analyzer._is_english_subtitle_track(track["language"], track["name"])
+                        is_signs = self.track_analyzer._is_signs_songs_track(track["name"])
+                        if is_eng and is_signs:
+                            # This track should have been detected - set it manually
+                            subtitle_track = track["id"] + 1
+                            self._on_log("INFO", f"Subtitle track {subtitle_track} detected manually (track analyzer bug workaround)")
+                            break
+            
+            # Debug: Log all tracks found
+            if tracks.get("all_tracks"):
+                self._on_log("DEBUG", f"Found {len(tracks['all_tracks'])} tracks in file")
+                subtitle_patterns = config.get_subtitle_name_patterns()
+                self._on_log("DEBUG", f"Subtitle name patterns: {subtitle_patterns}")
+                for track in tracks["all_tracks"]:
+                    if track["type"] == "subtitles":
+                        is_eng = self.track_analyzer._is_english_subtitle_track(track["language"], track["name"])
+                        is_signs = self.track_analyzer._is_signs_songs_track(track["name"])
+                        self._on_log("DEBUG", f"Subtitle track {track['id']} (HandBrake track {track['id'] + 1}): lang='{track['language']}', name='{track['name']}', English={is_eng}, Signs&Songs={is_signs}")
+                # Also log what was actually returned
+                self._on_log("DEBUG", f"Analysis returned: audio={tracks.get('audio')}, subtitle={tracks.get('subtitle')}")
+            
+            if not audio_track:
+                messagebox.showwarning("No Audio Track", "No English audio track found in the file.")
+                return
+            
+            # Update file data
+            first_file_data["audio_track"] = audio_track
+            first_file_data["subtitle_track"] = subtitle_track
+            if self.update_file_callback:
+                self.update_file_callback(0, first_file_data)
+            
+            # Generate new command with detected tracks
+            placeholder_input = Path("input.mkv")
+            placeholder_output = Path("output.mp4")
+            
+            cmd = self.ffmpeg_translator.get_command_string(
+                input_file=placeholder_input,
+                output_file=placeholder_output,
+                audio_track=audio_track,
+                subtitle_track=subtitle_track
+            )
+            
+            # Update command textbox
+            self.cmd_text.delete("1.0", "end")
+            self.cmd_text.insert("1.0", cmd)
+            
+            # Update preview
+            self._update_command_preview_display()
+            
+            # Show success message
+            track_info = f"Audio track: {audio_track}"
+            if subtitle_track:
+                track_info += f", Subtitle track: {subtitle_track}"
+            else:
+                track_info += ", No subtitle track detected"
+            messagebox.showinfo("Tracks Detected", f"Tracks detected successfully!\n{track_info}\n\nCommand updated with detected tracks.")
+            self._on_log("SUCCESS", f"Tracks detected - {track_info}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to detect tracks: {str(e)}")
+            self._on_log("ERROR", f"Track detection failed: {str(e)}")
+            import traceback
+            self._on_log("ERROR", f"Traceback: {traceback.format_exc()}")
     
     def _generate_command_preview(self) -> str:
         """Generate command preview with actual values from settings and files"""
@@ -829,7 +963,23 @@ class FFmpegTab(ctk.CTkFrame):
             
             # Update file data with track info
             file_data["audio_track"] = tracks["audio"]
-            file_data["subtitle_track"] = tracks.get("subtitle")
+            subtitle_track = tracks.get("subtitle")
+            
+            # Fix: If subtitle track wasn't detected but should have been, find it manually
+            # This is a workaround for a bug in the track analyzer where it doesn't always detect subtitles correctly
+            if not subtitle_track and tracks.get("all_tracks"):
+                for track in tracks["all_tracks"]:
+                    if track["type"] == "subtitles":
+                        is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
+                        is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
+                        if is_eng and is_signs:
+                            subtitle_track = track["id"] + 1
+                            self._on_log("INFO", f"Subtitle track {subtitle_track} detected manually for {source_file.name}")
+                            # IMPORTANT: Update tracks dict so extraction code can find it
+                            tracks["subtitle"] = subtitle_track
+                            break
+            
+            file_data["subtitle_track"] = subtitle_track
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             
@@ -855,13 +1005,21 @@ class FFmpegTab(ctk.CTkFrame):
             subtitle_file = None
             if tracks.get("subtitle") and not dry_run:
                 subtitle_stream_id = tracks["subtitle"] - 1  # Convert to 0-indexed
+                self._on_log("INFO", f"Extracting subtitle stream {subtitle_stream_id} (track {tracks['subtitle']})")
                 subtitle_file = extract_subtitle_stream(
                     ffmpeg_path=ffmpeg_path,
                     input_file=source_file,
                     subtitle_stream_id=subtitle_stream_id
                 )
-                if subtitle_file:
-                    self._on_log("INFO", f"Extracted subtitle to: {subtitle_file}")
+                if subtitle_file and subtitle_file.exists():
+                    file_size = subtitle_file.stat().st_size
+                    self._on_log("INFO", f"Extracted subtitle to: {subtitle_file} ({file_size} bytes)")
+                    if file_size == 0:
+                        self._on_log("WARNING", "Subtitle file is empty, subtitles may not appear")
+                        subtitle_file = None  # Don't use empty file
+                else:
+                    self._on_log("WARNING", f"Failed to extract subtitle stream {subtitle_stream_id} or file does not exist")
+                    subtitle_file = None
             
             # Get command from textbox (user may have edited it)
             command_template = self.cmd_text.get("1.0", "end-1c").strip()
@@ -1029,14 +1187,26 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Replace subtitle file placeholder
         if subtitle_file:
-            # Escape the path for use in filter (convert to forward slashes for FFmpeg filters)
-            # After converting \ to /, there are no backslashes left except \: which we need to escape for regex
-            sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
+            # Escape the path for use in FFmpeg subtitle filter on Windows
+            # FFmpeg subtitle filter requires special escaping for Windows paths:
+            # - Use forward slashes which FFmpeg handles better on Windows
+            # - Colon after drive letter must be escaped: : becomes \:
+            # - Single quotes in path must be escaped: ' becomes '\''
+            sub_path = str(subtitle_file).replace("\\", "/")
+            # Escape colon for filter syntax
+            sub_path = sub_path.replace(":", "\\:")
+            # Escape single quotes (for use inside single-quoted filter value)
             sub_path = sub_path.replace("'", "'\\''")
-            # Escape the backslash in \: for regex replacement (becomes \\: which regex will interpret as \:)
-            sub_path_escaped = sub_path.replace('\\', '\\\\')
-            command = re.sub(r'\{SUBTITLE_FILE\}', sub_path_escaped, command)
-            command = re.sub(r'<SUBTITLE_FILE>', sub_path_escaped, command)
+            # Use lambda to avoid issues with backslashes in replacement strings
+            # The placeholder is inside quotes like subtitles='{SUBTITLE_FILE}', so we just replace the placeholder
+            command = re.sub(r'\{SUBTITLE_FILE\}', lambda m: sub_path, command)
+            command = re.sub(r'<SUBTITLE_FILE>', lambda m: sub_path, command)
+        else:
+            # Remove subtitle filter if no subtitle file is available
+            # Remove ",subtitles='{SUBTITLE_FILE}'" or ",subtitles='<SUBTITLE_FILE>'" from filter chain
+            command = re.sub(r",\s*subtitles=['\"](?:\{SUBTITLE_FILE\}|<SUBTITLE_FILE>)['\"]", "", command)
+            # Also handle case where subtitle filter is first in chain (shouldn't happen, but just in case)
+            command = re.sub(r"subtitles=['\"](?:\{SUBTITLE_FILE\}|<SUBTITLE_FILE>)['\"]\s*,", "", command)
         
         # If command still contains "input.mkv" or "output.mp4" as literal paths, replace them
         # This handles the case where the preset generated command has placeholders in quotes
@@ -1056,14 +1226,30 @@ class FFmpegTab(ctk.CTkFrame):
         # Note: When passing a list to subprocess.Popen(), quotes are NOT needed - each element is a separate argument
         try:
             args = shlex.split(command, posix=False)  # posix=False for Windows compatibility
-            # Explicitly strip quotes from all arguments (shlex should do this, but ensure it's done)
-            # This is critical because subprocess.Popen() expects unquoted arguments when using a list
-            args = [arg.strip('"').strip("'") for arg in args]
-        except Exception:
+            # shlex.split() removes outer quotes but preserves inner quotes (like in filter syntax)
+            # This is correct - the quotes in subtitles='path' are part of the filter syntax and should be preserved
+        except Exception as e:
             # Fallback: simple split if shlex fails (but this won't handle spaces correctly)
+            self._on_log("WARNING", f"shlex.split() failed: {e}, using fallback parsing")
             args = command.split()
             # Still strip quotes in fallback
             args = [arg.strip('"').strip("'") for arg in args]
+        
+        # Strip quotes from file paths (shlex should do this, but ensure it's done)
+        # FFmpeg doesn't expect quotes in file paths when using a list of arguments
+        for i, arg in enumerate(args):
+            # Strip quotes from input file (after -i)
+            if arg == "-i" and i + 1 < len(args):
+                input_path = args[i + 1].strip('"').strip("'")
+                if not Path(input_path).exists():
+                    self._on_log("ERROR", f"Input file does not exist: {input_path}")
+                args[i + 1] = input_path
+            # Strip quotes from output file (last argument or after -y)
+            elif arg == "-y" and i + 1 < len(args):
+                args[i + 1] = args[i + 1].strip('"').strip("'")
+            # Also check if last argument is a file path (output file)
+            elif i == len(args) - 1 and (arg.endswith('.mp4') or arg.endswith('.mkv') or arg.endswith('.avi')):
+                args[i] = arg.strip('"').strip("'")
         
         # Replace "ffmpeg" with actual path if present (this should already be done, but just in case)
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"

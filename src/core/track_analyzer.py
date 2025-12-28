@@ -145,16 +145,25 @@ class TrackAnalyzer:
                     break
             
             if track["type"] == "subtitles" and subtitle_track is None:
-                is_english_sub = self._is_english_subtitle_track(track["language"], track["name"])
-                if is_english_sub and self._is_signs_songs_track(track["name"]):
+                is_english_sub = self._is_english_subtitle_track(track.get("language"), track.get("name"))
+                is_signs_songs = self._is_signs_songs_track(track.get("name"))
+                # Only set subtitle_track if BOTH conditions are met
+                if is_english_sub and is_signs_songs:
                     subtitle_track = track["id"] + 1  # Convert to 1-indexed
+                    # Break after finding first matching subtitle track (similar to audio)
+                    break
         
-        return {
+        result = {
             "audio": audio_track,
             "subtitle": subtitle_track,
             "error": None,
             "all_tracks": tracks  # For debugging
         }
+        # Debug: log what's being returned
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Track analysis result: audio={audio_track}, subtitle={subtitle_track}")
+        return result
     
     def _is_english_track(self, language: Optional[str], name: Optional[str]) -> bool:
         """Check if a track is English using configurable patterns"""
@@ -205,32 +214,22 @@ class TrackAnalyzer:
         """Check if a subtitle track is English using configurable patterns"""
         # Get configurable patterns
         lang_tags = config.get_subtitle_language_tags()
-        name_patterns = config.get_subtitle_name_patterns()
         exclude_patterns = config.get_subtitle_exclude_patterns()
         
-        # Check language tag
+        # Check language tag (primary method for determining English subtitles)
         if language:
             lang_lower = language.lower()
             for tag in lang_tags:
                 if lang_lower == tag.lower() or lang_lower.startswith(tag.lower() + "-") or lang_lower.startswith(tag.lower() + "_"):
+                    # Language matches, but check if it's excluded by name
+                    if name:
+                        for exclude_pattern in exclude_patterns:
+                            if re.search(exclude_pattern, name, re.IGNORECASE):
+                                return False
                     return True
         
-        # Check name for English indicators (but not excluded patterns)
-        if name:
-            # Check if name matches any pattern
-            matches_pattern = False
-            for pattern in name_patterns:
-                if re.search(pattern, name, re.IGNORECASE):
-                    matches_pattern = True
-                    break
-            
-            if matches_pattern:
-                # Check if it matches any exclude pattern
-                for exclude_pattern in exclude_patterns:
-                    if re.search(exclude_pattern, name, re.IGNORECASE):
-                        return False
-                return True
-        
+        # If no language tag or doesn't match, return False
+        # (We don't check name patterns here because those are for Signs & Songs detection, not English detection)
         return False
     
     def _analyze_with_ffprobe(self, file_path: Path) -> Dict[str, Optional[int]]:
