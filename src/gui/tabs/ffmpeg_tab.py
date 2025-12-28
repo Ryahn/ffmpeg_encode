@@ -35,8 +35,12 @@ class FFmpegTab(ctk.CTkFrame):
         self.update_file_callback: Optional[Callable] = None
         self.get_output_path_callback: Optional[Callable] = None
         
+        # Create scrollable frame for main content
+        scrollable = ctk.CTkScrollableFrame(self)
+        scrollable.pack(fill="both", expand=True, padx=10, pady=10)
+        
         # Top section - Preset selection
-        preset_frame = ctk.CTkFrame(self)
+        preset_frame = ctk.CTkFrame(scrollable)
         preset_frame.pack(fill="x", padx=10, pady=10)
         
         ctk.CTkLabel(preset_frame, text="HandBrake Preset:").pack(side="left", padx=5)
@@ -165,6 +169,40 @@ class FFmpegTab(ctk.CTkFrame):
         self.cmd_text = ctk.CTkTextbox(cmd_frame, height=100, font=ctk.CTkFont(family="Courier", size=10))
         self.cmd_text.pack(fill="x", padx=10, pady=5)
         # Keep it enabled for editing
+        
+        # Command Preview section
+        preview_header = ctk.CTkFrame(cmd_frame)
+        preview_header.pack(fill="x", padx=10, pady=(10, 5))
+        
+        preview_label_frame = ctk.CTkFrame(preview_header)
+        preview_label_frame.pack(side="left", padx=5)
+        
+        ctk.CTkLabel(
+            preview_label_frame,
+            text="Command Preview (read-only):",
+            font=ctk.CTkFont(size=11, weight="bold")
+        ).pack(side="left", padx=5)
+        
+        preview_buttons = ctk.CTkFrame(preview_header)
+        preview_buttons.pack(side="right", padx=5)
+        
+        ctk.CTkButton(
+            preview_buttons,
+            text="Copy Preview",
+            command=self._copy_preview_to_clipboard,
+            width=120,
+            height=25,
+            font=ctk.CTkFont(size=9)
+        ).pack(side="left", padx=2)
+        
+        # Preview textbox (read-only)
+        self.preview_text = ctk.CTkTextbox(
+            cmd_frame,
+            height=100,
+            font=ctk.CTkFont(family="Courier", size=10),
+            state="disabled"
+        )
+        self.preview_text.pack(fill="x", padx=10, pady=5)
         
         # Placeholder help
         placeholder_frame = ctk.CTkFrame(cmd_frame)
@@ -299,6 +337,35 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Try to load last used preset
         self._load_last_preset()
+        
+        # Wire up event handlers for preview updates
+        self._setup_preview_handlers()
+        
+        # Initial preview update
+        self._update_command_preview_display()
+    
+    def _setup_preview_handlers(self):
+        """Set up event handlers to update preview automatically"""
+        # Bind to command textbox changes
+        def on_cmd_text_change(event=None):
+            # Use after() to debounce rapid changes
+            self.after(300, self._update_command_preview_display)
+        
+        # Bind to text modification events
+        self.cmd_text.bind('<KeyRelease>', on_cmd_text_change)
+        self.cmd_text.bind('<Button-1>', on_cmd_text_change)  # Mouse click
+        self.cmd_text.bind('<ButtonRelease-1>', on_cmd_text_change)
+        
+        # Bind to suffix entry changes
+        def on_suffix_change(event=None):
+            self.after(300, self._update_command_preview_display)
+        
+        self.suffix_entry.bind('<KeyRelease>', on_suffix_change)
+        self.suffix_entry.bind('<FocusOut>', on_suffix_change)
+    
+    def on_files_changed(self):
+        """Callback for when files list changes - update preview"""
+        self._update_command_preview_display()
     
     def _init_encoder(self):
         """Initialize encoder with paths from config"""
@@ -361,6 +428,9 @@ class FFmpegTab(ctk.CTkFrame):
         # Update command preview (with placeholder file)
         self._update_command_preview()
         
+        # Update preview display
+        self._update_command_preview_display()
+        
         self._on_log("INFO", f"Loaded preset: {preset_name}")
     
     def _on_preset_selected(self, choice: str):
@@ -399,15 +469,181 @@ class FFmpegTab(ctk.CTkFrame):
         placeholder_input = Path("input.mkv")
         placeholder_output = Path("output.mp4")
         
+        # Use audio_track=2 as placeholder (represents track ID 1, which would map to stream 1)
+        # This gives a more realistic preview. The actual track will be detected during encoding.
         cmd = self.ffmpeg_translator.get_command_string(
             input_file=placeholder_input,
             output_file=placeholder_output,
-            audio_track=1,
+            audio_track=2,  # Track ID 1 + 1 = 2, which maps to stream 1
             subtitle_track=None
         )
         
         self.cmd_text.delete("1.0", "end")
         self.cmd_text.insert("1.0", cmd)
+        # Update preview after command is updated
+        self._update_command_preview_display()
+    
+    def _generate_command_preview(self) -> str:
+        """Generate command preview with actual values from settings and files"""
+        # Get current command from textbox
+        command_template = self.cmd_text.get("1.0", "end-1c").strip()
+        
+        if not command_template:
+            return "No command entered - load a preset or enter a command to see preview"
+        
+        # Try to get first file from files list
+        files = []
+        if self.get_files_callback:
+            files = self.get_files_callback()
+        
+        if not files or len(files) == 0:
+            return "No files available - add files to see preview with actual file paths"
+        
+        # Get first file
+        first_file_data = files[0]
+        source_file = Path(first_file_data["path"])
+        
+        # Calculate output path
+        if self.get_output_path_callback:
+            output_dir = self.get_output_path_callback(source_file)
+        else:
+            output_dir = source_file.parent
+        
+        suffix = self.suffix_entry.get() if hasattr(self, 'suffix_entry') else config.get_default_output_suffix()
+        output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
+        
+        # Try to get track info from file data or analyze
+        audio_track = first_file_data.get("audio_track")
+        subtitle_track = first_file_data.get("subtitle_track")
+        
+        # If tracks not in file data, try to analyze (but don't block if it fails)
+        if audio_track is None and self.track_analyzer:
+            try:
+                tracks = self.track_analyzer.analyze_tracks(source_file)
+                if not tracks.get("error"):
+                    audio_track = tracks.get("audio", 2)  # Default to 2 if not found
+                    subtitle_track = tracks.get("subtitle")
+            except Exception:
+                # If analysis fails, use defaults
+                audio_track = 2
+                subtitle_track = None
+        
+        # Use defaults if still not set
+        if audio_track is None:
+            audio_track = 2
+        
+        # Generate example subtitle file path if subtitle track exists
+        subtitle_file = None
+        if subtitle_track:
+            # Create a temporary path example (won't actually exist, just for preview)
+            subtitle_file = Path(tempfile.gettempdir()) / f"{source_file.stem}_subtitle.ass"
+        
+        # Replace placeholders using similar logic to _parse_and_substitute_command
+        # but format for display (with quotes for paths with spaces)
+        command = command_template
+        
+        # Helper function to quote paths with spaces for display
+        def quote_path_if_needed(path_str: str) -> str:
+            """Quote path if it contains spaces, for display purposes"""
+            if ' ' in path_str:
+                return f'"{path_str}"'
+            return path_str
+        
+        input_file_str = str(source_file)
+        output_file_str = str(output_file)
+        
+        # Quote paths with spaces for display
+        input_file_quoted = quote_path_if_needed(input_file_str)
+        output_file_quoted = quote_path_if_needed(output_file_str)
+        
+        # Escape paths for regex replacement (use re.escape to handle all special chars safely)
+        def escape_for_replacement(path_str: str) -> str:
+            # For replacement strings, we need to escape backslashes to prevent
+            # Python from interpreting escape sequences like \U as Unicode escapes
+            return path_str.replace('\\', '\\\\')
+        
+        input_file_escaped = escape_for_replacement(input_file_quoted)
+        output_file_escaped = escape_for_replacement(output_file_quoted)
+        
+        # Replace input file placeholders
+        # Use lambda to avoid issues with backslashes in replacement strings
+        command = re.sub(r'\binput\.mkv\b', lambda m: input_file_quoted, command, flags=re.IGNORECASE)
+        command = re.sub(r'\{INPUT\}', lambda m: input_file_quoted, command)
+        command = re.sub(r'<INPUT>', lambda m: input_file_quoted, command)
+        
+        # Replace output file placeholders
+        command = re.sub(r'\boutput\.mp4\b', lambda m: output_file_quoted, command, flags=re.IGNORECASE)
+        command = re.sub(r'\{OUTPUT\}', lambda m: output_file_quoted, command)
+        command = re.sub(r'<OUTPUT>', lambda m: output_file_quoted, command)
+        
+        # Replace audio track placeholder
+        command = re.sub(r'\{AUDIO_TRACK\}', str(audio_track), command)
+        command = re.sub(r'<AUDIO_TRACK>', str(audio_track), command)
+        
+        # Replace audio stream mapping with correct stream ID
+        audio_stream_id = audio_track - 1
+        command = re.sub(
+            r'(-map\s+0:v:0\s+)-map\s+0:\d+',
+            rf'\1-map 0:{audio_stream_id}',
+            command
+        )
+        
+        # Replace subtitle track placeholder
+        if subtitle_track:
+            command = re.sub(r'\{SUBTITLE_TRACK\}', str(subtitle_track), command)
+            command = re.sub(r'<SUBTITLE_TRACK>', str(subtitle_track), command)
+        
+        # Replace subtitle file placeholder
+        if subtitle_file:
+            # Format subtitle path for filter (convert to forward slashes)
+            sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
+            sub_path = sub_path.replace("'", "'\\''")
+            # Use lambda to avoid issues with backslashes in replacement strings
+            command = re.sub(r'\{SUBTITLE_FILE\}', lambda m: sub_path, command)
+            command = re.sub(r'<SUBTITLE_FILE>', lambda m: sub_path, command)
+        
+        # Replace quoted placeholders
+        command = re.sub(r'"input\.mkv"', lambda m: input_file_quoted, command, flags=re.IGNORECASE)
+        command = re.sub(r'"output\.mp4"', lambda m: output_file_quoted, command, flags=re.IGNORECASE)
+        input_single_quoted = f"'{input_file_str}'"
+        output_single_quoted = f"'{output_file_str}'"
+        command = re.sub(r"'input\.mkv'", lambda m: input_single_quoted, command, flags=re.IGNORECASE)
+        command = re.sub(r"'output\.mp4'", lambda m: output_single_quoted, command, flags=re.IGNORECASE)
+        
+        # Replace ffmpeg path if present (use lambda to handle paths with backslashes)
+        ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
+        if ffmpeg_path != "ffmpeg":
+            command = re.sub(r'\bffmpeg\b', lambda m: ffmpeg_path, command, flags=re.IGNORECASE)
+        
+        return command
+    
+    def _update_command_preview_display(self):
+        """Update the command preview textbox"""
+        try:
+            preview_text = self._generate_command_preview()
+            self.preview_text.configure(state="normal")
+            self.preview_text.delete("1.0", "end")
+            self.preview_text.insert("1.0", preview_text)
+            self.preview_text.configure(state="disabled")
+        except Exception as e:
+            # If preview generation fails, show error message
+            self.preview_text.configure(state="normal")
+            self.preview_text.delete("1.0", "end")
+            self.preview_text.insert("1.0", f"Error generating preview: {str(e)}")
+            self.preview_text.configure(state="disabled")
+    
+    def _copy_preview_to_clipboard(self):
+        """Copy the preview command to clipboard"""
+        try:
+            preview_text = self.preview_text.get("1.0", "end-1c")
+            if preview_text and not preview_text.startswith("No command") and not preview_text.startswith("No files"):
+                self.clipboard_clear()
+                self.clipboard_append(preview_text)
+                messagebox.showinfo("Copied", "Preview command copied to clipboard")
+            else:
+                messagebox.showwarning("Nothing to Copy", "No valid preview available to copy")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to copy to clipboard: {str(e)}")
     
     def _save_command(self):
         """Save the current command"""
@@ -450,6 +686,7 @@ class FFmpegTab(ctk.CTkFrame):
                     command = f.read().strip()
                 self.cmd_text.delete("1.0", "end")
                 self.cmd_text.insert("1.0", command)
+                self._update_command_preview_display()
                 messagebox.showinfo("Loaded", "Command loaded from file")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load file: {str(e)}")
@@ -509,6 +746,7 @@ class FFmpegTab(ctk.CTkFrame):
             if command:
                 self.cmd_text.delete("1.0", "end")
                 self.cmd_text.insert("1.0", command)
+                self._update_command_preview_display()
     
     def _insert_placeholder(self, placeholder: str):
         """Insert a placeholder at the cursor position"""
@@ -517,9 +755,13 @@ class FFmpegTab(ctk.CTkFrame):
             cursor_pos = self.cmd_text.index("insert")
             # Insert the placeholder
             self.cmd_text.insert(cursor_pos, placeholder)
+            # Update preview after inserting placeholder
+            self._update_command_preview_display()
         except Exception:
             # If cursor position fails, just append
             self.cmd_text.insert("end", placeholder)
+            # Update preview after inserting placeholder
+            self._update_command_preview_display()
     
     def _start_encoding(self):
         """Start encoding process"""
@@ -767,6 +1009,18 @@ class FFmpegTab(ctk.CTkFrame):
         # Replace audio track placeholder
         command = re.sub(r'\{AUDIO_TRACK\}', str(audio_track), command)
         command = re.sub(r'<AUDIO_TRACK>', str(audio_track), command)
+        
+        # Replace audio stream mapping with correct stream ID
+        # Convert audio_track (1-indexed mkvmerge track ID) to 0-indexed FFmpeg stream ID
+        audio_stream_id = audio_track - 1
+        # Replace the audio mapping that appears after the video mapping
+        # Pattern: -map 0:v:0 followed by -map 0:N (where N is the old audio stream ID)
+        # This ensures we only update the audio mapping, not the video mapping
+        command = re.sub(
+            r'(-map\s+0:v:0\s+)-map\s+0:\d+',
+            rf'\1-map 0:{audio_stream_id}',
+            command
+        )
         
         # Replace subtitle track placeholder
         if subtitle_track:

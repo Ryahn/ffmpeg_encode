@@ -154,6 +154,9 @@ class MainWindow(ctk.CTk):
         files = self.files_tab.get_files()
         count = len(files)
         self._update_status(f"{count} file(s) ready")
+        # Notify FFmpeg tab to update preview
+        if hasattr(self.ffmpeg_tab, 'on_files_changed'):
+            self.ffmpeg_tab.on_files_changed()
     
     def _update_status(self, message: Optional[str] = None):
         """Update status bar"""

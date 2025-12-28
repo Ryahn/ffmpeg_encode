@@ -131,11 +131,18 @@ class TrackAnalyzer:
             tracks.append(current_track)
         
         # Process tracks to find English audio and Signs & Songs subtitle
-        for track in tracks:
+        # Use mkvmerge track ID directly (matches FFmpeg stream index in MKV files)
+        # Convert to 1-indexed for HandBrake compatibility (same as PowerShell script)
+        # Process tracks in order (as they appear in the file) to match PowerShell behavior
+        for track in sorted(tracks, key=lambda t: t["id"]):
             if track["type"] == "audio" and audio_track is None:
                 is_english = self._is_english_track(track["language"], track["name"])
                 if is_english:
-                    audio_track = track["id"] + 1  # Convert to 1-indexed
+                    # Return 1-indexed track number (mkvmerge track ID + 1)
+                    # This matches the PowerShell script behavior: $AudioTrackNumber = $CurrentTrackNumber + 1
+                    audio_track = track["id"] + 1
+                    # Break after finding first English audio track (matches PowerShell behavior)
+                    break
             
             if track["type"] == "subtitles" and subtitle_track is None:
                 is_english_sub = self._is_english_subtitle_track(track["language"], track["name"])

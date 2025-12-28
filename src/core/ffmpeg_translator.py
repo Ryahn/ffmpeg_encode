@@ -25,7 +25,9 @@ class FFmpegTranslator:
         # Map video stream
         cmd.extend(["-map", "0:v:0"])
         
-        # Map audio stream (convert 1-indexed to 0-indexed)
+        # Map audio stream (audio_track is 1-indexed mkvmerge track ID)
+        # Convert to 0-indexed FFmpeg stream ID and use absolute stream mapping
+        # This matches the PowerShell script behavior: -map 0:$AudioStreamID
         audio_stream_id = audio_track - 1
         cmd.extend(["-map", f"0:{audio_stream_id}"])
         
