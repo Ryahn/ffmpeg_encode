@@ -4,8 +4,12 @@ import customtkinter as ctk
 from tkinter import filedialog
 from pathlib import Path
 from typing import Optional
+import os
+import sys
+import subprocess
 from core.track_analyzer import TrackAnalyzer
 from utils.config import config
+from utils.logger import logger
 
 
 class DebugTab(ctk.CTkFrame):
@@ -75,7 +79,162 @@ class DebugTab(ctk.CTkFrame):
         )
         self.analysis_label.pack(fill="x", padx=10, pady=10)
         
+        # Log files tab
+        self.results_tabs.add("Log Files")
+        self._setup_log_tab()
+        
         self.current_file: Optional[Path] = None
+    
+    def _setup_log_tab(self):
+        """Setup the log files tab"""
+        log_tab = self.results_tabs.tab("Log Files")
+        
+        # Log file info frame
+        info_frame = ctk.CTkFrame(log_tab)
+        info_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkLabel(
+            info_frame,
+            text="Current Log File:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", padx=10, pady=5)
+        
+        log_file = logger.get_log_file()
+        if log_file and log_file.exists():
+            log_path_str = str(log_file)
+            self.log_path_label = ctk.CTkLabel(
+                info_frame,
+                text=log_path_str,
+                anchor="w",
+                justify="left",
+                font=ctk.CTkFont(family="Courier", size=10)
+            )
+            self.log_path_label.pack(fill="x", padx=10, pady=5)
+        else:
+            self.log_path_label = ctk.CTkLabel(
+                info_frame,
+                text="No log file available (logging may have failed to initialize)",
+                anchor="w",
+                text_color="gray"
+            )
+            self.log_path_label.pack(fill="x", padx=10, pady=5)
+        
+        # Button frame
+        button_frame = ctk.CTkFrame(log_tab)
+        button_frame.pack(fill="x", padx=10, pady=10)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="Open Log File",
+            command=self._open_log_file,
+            width=150
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="Open Log Directory",
+            command=self._open_log_directory,
+            width=150
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            button_frame,
+            text="Refresh Log View",
+            command=self._refresh_log_view,
+            width=150
+        ).pack(side="left", padx=5)
+        
+        # Recent logs display
+        log_display_frame = ctk.CTkFrame(log_tab)
+        log_display_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        ctk.CTkLabel(
+            log_display_frame,
+            text="Recent Log Entries (last 100):",
+            font=ctk.CTkFont(size=12, weight="bold")
+        ).pack(anchor="w", padx=10, pady=5)
+        
+        self.log_display = ctk.CTkTextbox(
+            log_display_frame,
+            font=ctk.CTkFont(family="Courier", size=9),
+            wrap="word"
+        )
+        self.log_display.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Load initial log view
+        self._refresh_log_view()
+    
+    def _open_log_file(self):
+        """Open the current log file in default text editor"""
+        log_file = logger.get_log_file()
+        if not log_file or not log_file.exists():
+            return
+        
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(log_file))
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(log_file)])
+            else:
+                subprocess.run(["xdg-open", str(log_file)])
+        except Exception as e:
+            # Fallback: try to open with default editor
+            try:
+                if sys.platform == "win32":
+                    os.startfile(str(log_file), "edit")
+                else:
+                    subprocess.run(["xdg-open", str(log_file)])
+            except:
+                pass
+    
+    def _open_log_directory(self):
+        """Open the log directory in file explorer"""
+        log_file = logger.get_log_file()
+        if not log_file:
+            log_dir = Path.home() / ".video_encoder" / "logs"
+        else:
+            log_dir = log_file.parent
+        
+        if not log_dir.exists():
+            return
+        
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(log_dir))
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(log_dir)])
+            else:
+                subprocess.run(["xdg-open", str(log_dir)])
+        except Exception as e:
+            pass
+    
+    def _refresh_log_view(self):
+        """Refresh the log display with recent entries"""
+        self.log_display.delete("1.0", "end")
+        
+        # Update log file path if it changed
+        log_file = logger.get_log_file()
+        if log_file and log_file.exists():
+            log_path_str = str(log_file)
+            if hasattr(self, 'log_path_label'):
+                self.log_path_label.configure(text=log_path_str)
+        
+        # Get recent logs
+        recent_logs = logger.get_recent_logs(100)
+        
+        if not recent_logs:
+            self.log_display.insert("1.0", "No log entries yet.")
+            return
+        
+        # Format logs for display
+        log_text = ""
+        for level, message in recent_logs:
+            # Format with level indicator
+            log_text += f"[{level}] {message}\n"
+        
+        self.log_display.insert("1.0", log_text)
+        # Scroll to bottom
+        self.log_display.see("end")
     
     def _browse_file(self):
         """Browse for a video file"""

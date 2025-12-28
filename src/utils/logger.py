@@ -11,29 +11,41 @@ class Logger:
     """Application logger with file and console output"""
     
     def __init__(self, log_dir: Optional[Path] = None):
-        if log_dir is None:
-            log_dir = Path.home() / ".video_encoder" / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create log file with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        log_file = log_dir / f"encode-{timestamp}.log"
-        
         # Setup logger
         self.logger = logging.getLogger("VideoEncoder")
         self.logger.setLevel(logging.DEBUG)
         
-        # File handler
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setLevel(logging.DEBUG)
-        file_formatter = logging.Formatter(
-            '[%(asctime)s] [%(levelname)s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        file_handler.setFormatter(file_formatter)
-        self.logger.addHandler(file_handler)
+        # Determine log directory
+        if log_dir is None:
+            log_dir = Path.home() / ".video_encoder" / "logs"
         
-        # Console handler
+        # Create log directory with error handling
+        log_file = None
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create log file with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            log_file = log_dir / f"encode-{timestamp}.log"
+            
+            # File handler
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            file_handler.setLevel(logging.DEBUG)
+            file_formatter = logging.Formatter(
+                '[%(asctime)s] [%(levelname)s] %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            file_handler.setFormatter(file_formatter)
+            self.logger.addHandler(file_handler)
+        except Exception as e:
+            # If file logging fails, log to stderr
+            import sys
+            print(f"Warning: Failed to initialize file logging: {e}", file=sys.stderr)
+            print(f"Log directory attempted: {log_dir}", file=sys.stderr)
+            # Continue with console-only logging
+            log_file = None
+        
+        # Console handler (always available as fallback)
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
         console_formatter = logging.Formatter('%(message)s')
@@ -68,7 +80,7 @@ class Logger:
         self.logger.debug(message)
         self._log_buffer.append(("DEBUG", message))
     
-    def get_log_file(self) -> Path:
+    def get_log_file(self) -> Optional[Path]:
         """Get the log file path"""
         return self.log_file
     

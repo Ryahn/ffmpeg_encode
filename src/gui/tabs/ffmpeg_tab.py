@@ -823,5 +823,16 @@ class FFmpegTab(ctk.CTkFrame):
     def _on_log(self, level: str, message: str):
         """Handle log message"""
         self.log_viewer.add_log(level, message)
-        logger.info(f"[FFmpeg] {message}")
+        # Map log level to appropriate logger method
+        prefixed_message = f"[FFmpeg] {message}"
+        if level == "ERROR":
+            logger.error(prefixed_message)
+        elif level == "WARNING":
+            logger.warning(prefixed_message)
+        elif level == "SUCCESS":
+            logger.success(prefixed_message)
+        elif level == "DEBUG":
+            logger.debug(prefixed_message)
+        else:  # INFO or default
+            logger.info(prefixed_message)
 
