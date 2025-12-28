@@ -41,7 +41,7 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Top section - Preset selection
         preset_frame = ctk.CTkFrame(scrollable)
-        preset_frame.pack(fill="x", padx=10, pady=10)
+        preset_frame.pack(fill="x", pady=10)
         
         ctk.CTkLabel(preset_frame, text="HandBrake Preset:").pack(side="left", padx=5)
         
@@ -64,8 +64,8 @@ class FFmpegTab(ctk.CTkFrame):
         ).pack(side="left", padx=5)
         
         # Command editor
-        cmd_frame = ctk.CTkFrame(self)
-        cmd_frame.pack(fill="x", padx=10, pady=10)
+        cmd_frame = ctk.CTkFrame(scrollable)
+        cmd_frame.pack(fill="x", pady=10)
         
         cmd_header = ctk.CTkFrame(cmd_frame)
         cmd_header.pack(fill="x", padx=10, pady=5)
@@ -245,8 +245,8 @@ class FFmpegTab(ctk.CTkFrame):
         self._update_saved_commands_dropdown()
         
         # Encoding controls
-        controls_frame = ctk.CTkFrame(self)
-        controls_frame.pack(fill="x", padx=10, pady=10)
+        controls_frame = ctk.CTkFrame(scrollable)
+        controls_frame.pack(fill="x", pady=10)
         
         # Options
         options_frame = ctk.CTkFrame(controls_frame)
@@ -316,12 +316,12 @@ class FFmpegTab(ctk.CTkFrame):
         self.stop_button.pack(side="left", padx=5)
         
         # Progress display
-        self.progress_display = ProgressDisplay(self)
-        self.progress_display.pack(fill="x", padx=10, pady=10)
+        self.progress_display = ProgressDisplay(scrollable)
+        self.progress_display.pack(fill="x", pady=10)
         
-        # Log viewer
+        # Log viewer (fixed at bottom, not in scrollable frame)
         log_frame = ctk.CTkFrame(self)
-        log_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        log_frame.pack(fill="x", padx=10, pady=(0, 10))
         
         ctk.CTkLabel(
             log_frame,
@@ -330,7 +330,7 @@ class FFmpegTab(ctk.CTkFrame):
         ).pack(anchor="w", padx=10, pady=5)
         
         self.log_viewer = LogViewer(log_frame, height=200)
-        self.log_viewer.pack(fill="both", expand=True, padx=10, pady=10)
+        self.log_viewer.pack(fill="x", padx=10, pady=(0, 10))
         
         # Initialize encoder
         self._init_encoder()
