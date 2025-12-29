@@ -9,6 +9,20 @@ import shutil
 from utils.config import config
 
 
+def _get_subprocess_kwargs() -> dict:
+    """Get subprocess kwargs with hidden console window on Windows"""
+    kwargs = {}
+    if sys.platform == 'win32':
+        # Use CREATE_NO_WINDOW constant (0x08000000) to prevent console window
+        # This works with both Popen and run, and still allows stdout/stderr capture
+        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        else:
+            # Fallback to constant value if attribute not available
+            kwargs['creationflags'] = 0x08000000
+    return kwargs
+
+
 class TrackAnalyzer:
     """Analyzes video files to detect audio and subtitle tracks"""
     
@@ -28,8 +42,7 @@ class TrackAnalyzer:
                 'text': True,
                 'timeout': 30
             }
-            if sys.platform == 'win32':
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            run_kwargs.update(_get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             if result.returncode == 0:
@@ -65,8 +78,7 @@ class TrackAnalyzer:
                 'text': True,
                 'timeout': 30
             }
-            if sys.platform == 'win32':
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            run_kwargs.update(_get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             

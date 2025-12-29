@@ -4,8 +4,23 @@ import os
 import platform
 import subprocess
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
+
+
+def _get_subprocess_kwargs() -> dict:
+    """Get subprocess kwargs with hidden console window on Windows"""
+    kwargs = {}
+    if sys.platform == 'win32':
+        # Use CREATE_NO_WINDOW constant (0x08000000) to prevent console window
+        # This works with both Popen and run, and still allows stdout/stderr capture
+        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        else:
+            # Fallback to constant value if attribute not available
+            kwargs['creationflags'] = 0x08000000
+    return kwargs
 
 
 class PackageManager:
@@ -155,8 +170,7 @@ class PackageManager:
                 'text': True,
                 'timeout': 600  # 10 minute timeout
             }
-            if sys.platform == 'win32':
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            run_kwargs.update(_get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             
@@ -185,8 +199,7 @@ class PackageManager:
                 'text': True,
                 'timeout': 600  # 10 minute timeout
             }
-            if sys.platform == 'win32':
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            run_kwargs.update(_get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             

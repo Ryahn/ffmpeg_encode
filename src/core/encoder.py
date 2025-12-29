@@ -12,6 +12,20 @@ from queue import Queue
 import tempfile
 
 
+def _get_subprocess_kwargs() -> dict:
+    """Get subprocess kwargs with hidden console window on Windows"""
+    kwargs = {}
+    if sys.platform == 'win32':
+        # Use CREATE_NO_WINDOW constant (0x08000000) to prevent console window
+        # This works with both Popen and run, and still allows stdout/stderr capture
+        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
+            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        else:
+            # Fallback to constant value if attribute not available
+            kwargs['creationflags'] = 0x08000000
+    return kwargs
+
+
 class EncodingProgress:
     """Represents encoding progress"""
     
@@ -133,8 +147,7 @@ class Encoder:
                     'universal_newlines': True,
                     'shell': False
                 }
-                if sys.platform == 'win32':
-                    popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+                popen_kwargs.update(_get_subprocess_kwargs())
                 
                 process = subprocess.Popen(**popen_kwargs)
                 self._log("INFO", f"Process started (PID: {process.pid})")
@@ -285,16 +298,22 @@ class Encoder:
                     progress.percent = min(100.0, (current_time_sec / self._input_duration) * 100.0)
             
             if speed_match:
-                progress.speed = float(speed_match.group(1))
-                # Calculate ETA if we have both duration and current time
-                if time_match and self._input_duration and self._input_duration > 0:
-                    current_time_sec = self._time_to_seconds(progress.time)
-                    remaining_time_sec = (self._input_duration - current_time_sec) / progress.speed
-                    if remaining_time_sec > 0:
-                        hours = int(remaining_time_sec // 3600)
-                        minutes = int((remaining_time_sec % 3600) // 60)
-                        seconds = int(remaining_time_sec % 60)
-                        progress.eta = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                try:
+                    progress.speed = float(speed_match.group(1))
+                    # Calculate ETA if we have both duration and current time
+                    if time_match and self._input_duration and self._input_duration > 0:
+                        current_time_sec = self._time_to_seconds(progress.time)
+                        # Only calculate ETA if speed is valid and non-zero
+                        if progress.speed and progress.speed > 0:
+                            remaining_time_sec = (self._input_duration - current_time_sec) / progress.speed
+                            if remaining_time_sec > 0:
+                                hours = int(remaining_time_sec // 3600)
+                                minutes = int((remaining_time_sec % 3600) // 60)
+                                seconds = int(remaining_time_sec % 60)
+                                progress.eta = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                except (ValueError, ZeroDivisionError):
+                    # Skip ETA calculation if speed is invalid or zero
+                    pass
             
             if fps_match:
                 progress.fps = float(fps_match.group(1))
@@ -374,8 +393,7 @@ def extract_subtitle_stream(
             'text': True,
             'timeout': 30
         }
-        if sys.platform == 'win32':
-            run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        run_kwargs.update(_get_subprocess_kwargs())
         
         result = subprocess.run(**run_kwargs)
         
