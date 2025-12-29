@@ -1,7 +1,7 @@
 [Setup]
 AppName=ffmpeg_encode
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.3"
+  #define MyAppVersion "1.2.7"
 #endif
 AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\ffmpeg_encode

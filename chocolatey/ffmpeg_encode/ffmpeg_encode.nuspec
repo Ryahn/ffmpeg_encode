@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>ffmpeg_encode</id>
-    <version>1.2.1</version>
+    <version>1.2.7</version>
     <packageSourceUrl>https://github.com/Ryahn/ffmpeg_encode/tree/main/chocolatey/ffmpeg_encode</packageSourceUrl>
     <owners>Ryan Carr</owners>
 
