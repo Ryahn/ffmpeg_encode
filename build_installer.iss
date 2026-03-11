@@ -1,7 +1,7 @@
 [Setup]
 AppName=ffmpeg_encode
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.8"
+  #define MyAppVersion "1.2.9"
 #endif
 AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\ffmpeg_encode
@@ -23,7 +23,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "dist\ffmpeg_encode.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\ffmpeg_encode\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\ffmpeg_encode"; Filename: "{app}\ffmpeg_encode.exe"
