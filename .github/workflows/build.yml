@@ -53,6 +53,7 @@ jobs:
       - name: Create portable package
         shell: pwsh
         run: |
+          # Portable ZIP = onedir folder (dist/ffmpeg_encode), not single exe
           New-Item -ItemType Directory -Force -Path dist_portable | Out-Null
           Compress-Archive -Path dist\ffmpeg_encode -DestinationPath dist_portable\ffmpeg_encode-portable.zip
       

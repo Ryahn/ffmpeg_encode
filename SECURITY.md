@@ -7,7 +7,8 @@ ffmpeg_encode is an open-source GUI for encoding video with FFmpeg and HandBrake
 ## Why security software may flag the installer or executable
 
 - **Process creation**: The app launches FFmpeg and HandBrake as child processes and reads their output. This is normal encoder behavior, not malware.
-- **“Writes to remote process”**: PyInstaller’s bootloader unpacks the bundled app at runtime. Some sandboxes report this as writing to a process. The app does not use process injection APIs (e.g. `WriteProcessMemory`).
+- **“Writes to remote process” (app)**: PyInstaller’s bootloader unpacks the bundled app at runtime. Some sandboxes report this as writing to a process. The app does not use process injection APIs (e.g. `WriteProcessMemory`).
+- **“Writes to remote process” (Setup)**: The Inno Setup installer extracts its payload to a temp folder (e.g. `%TEMP%\is-XXXXX.tmp\`) and may write to that extracted process as part of the install flow. This is the installer communicating with its own extracted helper, not cross-process injection (e.g. ATT&CK T1055 in the malicious sense).
 - **Archive / installer behavior**: The Inno Setup installer compresses and extracts files (LZMA2). Installers are often heuristically flagged for “writes archive files” and similar.
 
 We do not use UPX compression in the main executable to reduce false positives.

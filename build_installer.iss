@@ -1,5 +1,6 @@
 [Setup]
 AppName=ffmpeg_encode
+; Setup (installer) version. CI passes /DMyAppVersion when building from a tag.
 #ifndef MyAppVersion
   #define MyAppVersion "1.2.9"
 #endif
