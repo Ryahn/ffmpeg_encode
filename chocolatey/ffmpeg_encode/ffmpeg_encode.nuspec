@@ -1,19 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
-    <id>ffmpeg_encode</id>
-    <version>1.2.7</version>
+    <id>ffmpeg-encode</id>
+    <version>1.2.8</version>
     <packageSourceUrl>https://github.com/Ryahn/ffmpeg_encode/tree/main/chocolatey/ffmpeg_encode</packageSourceUrl>
     <owners>Ryan Carr</owners>
 
-    <title>ffmpeg_encode (Install)</title>
+    <title>ffmpeg-encode (Install)</title>
     <authors>Ryan Carr</authors>
     <projectUrl>https://github.com/Ryahn/ffmpeg_encode</projectUrl>
     <iconUrl>https://raw.githubusercontent.com/Ryahn/ffmpeg_encode/refs/heads/main/icons/icon1024.png</iconUrl>
     <copyright>2025 Ryan Carr</copyright>
     <licenseUrl>https://github.com/Ryahn/ffmpeg_encode/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>true</requireLicenseAcceptance>
-    <projectSourceUrl>https://github.com/Ryahn/ffmpeg_encode</projectSourceUrl>
     <docsUrl>https://github.com/Ryahn/ffmpeg_encode/blob/main/README.md</docsUrl>
     <bugTrackerUrl>https://github.com/Ryahn/ffmpeg_encode/issues</bugTrackerUrl>
     <tags>ffmpeg_encode ffmpeg handbrake video encoder gui encoding video-audio subtitle</tags>

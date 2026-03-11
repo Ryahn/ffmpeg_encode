@@ -11,6 +11,13 @@ from typing import Optional, Callable, Dict, Any
 from queue import Queue
 import tempfile
 
+# Try to import psutil for better process management (optional)
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
 
 def _get_subprocess_kwargs() -> dict:
     """Get subprocess kwargs with hidden console window on Windows"""
@@ -35,7 +42,6 @@ class EncodingProgress:
         self.speed: Optional[float] = None
         self.eta: Optional[str] = None
         self.fps: Optional[float] = None
-        self.fps: Optional[float] = None
 
 
 class Encoder:
@@ -54,6 +60,10 @@ class Encoder:
         self.log_callback = log_callback
         self._stop_event = threading.Event()
         self._input_duration: Optional[float] = None  # Duration in seconds
+        self._current_process: Optional[subprocess.Popen] = None
+        self._process_lock = threading.Lock()  # Thread-safe access to process
+        self._stdout_thread: Optional[threading.Thread] = None
+        self._stderr_thread: Optional[threading.Thread] = None
     
     def encode_with_handbrake(
         self,
@@ -151,6 +161,10 @@ class Encoder:
                 
                 process = subprocess.Popen(**popen_kwargs)
                 self._log("INFO", f"Process started (PID: {process.pid})")
+                
+                # Store process reference for forceful termination
+                with self._process_lock:
+                    self._current_process = process
             except FileNotFoundError as e:
                 self._log("ERROR", f"Encoder executable not found: {args[0] if args else 'unknown'}")
                 self._log("ERROR", f"Error details: {str(e)}")
@@ -176,6 +190,10 @@ class Encoder:
                 daemon=True
             )
             
+            # Store thread references for cleanup
+            self._stdout_thread = stdout_thread
+            self._stderr_thread = stderr_thread
+            
             stdout_thread.start()
             stderr_thread.start()
             
@@ -183,10 +201,32 @@ class Encoder:
             while process.poll() is None:
                 if self._stop_event.is_set():
                     self._log("INFO", "Stop event set, terminating process...")
-                    process.terminate()
-                    process.wait(timeout=5)
-                    if process.poll() is None:
-                        process.kill()
+                    # Close pipes immediately to unblock reading threads
+                    self._close_pipes(process)
+                    
+                    # Try graceful termination first
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                    
+                    # Wait briefly for graceful shutdown, but don't block too long
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        # Force kill if still running
+                        try:
+                            if sys.platform == 'win32':
+                                self._kill_process_tree_windows(process.pid)
+                            else:
+                                process.kill()
+                        except Exception:
+                            pass
+                    
+                    # Clear process reference
+                    with self._process_lock:
+                        self._current_process = None
+                    
                     return False
                 
                 # Process stdout
@@ -200,12 +240,24 @@ class Encoder:
                     self._parse_progress(line, encoder_name)
                     self._log("DEBUG", f"[{encoder_name}] {line}")
                 
-                time.sleep(0.1)
+                # Use shorter sleep for more responsive stop detection
+                time.sleep(0.05)
             
             # Get remaining output
             self._log("INFO", f"Process finished with return code: {process.returncode}")
-            stdout_thread.join(timeout=2)
-            stderr_thread.join(timeout=2)
+            
+            # Clear process reference
+            with self._process_lock:
+                self._current_process = None
+            
+            # Close pipes to unblock reading threads
+            self._close_pipes(process)
+            
+            # Wait for threads with timeout to prevent hanging
+            if stdout_thread.is_alive():
+                stdout_thread.join(timeout=1)
+            if stderr_thread.is_alive():
+                stderr_thread.join(timeout=1)
             
             while not stdout_queue.empty():
                 line = stdout_queue.get()
@@ -243,6 +295,20 @@ class Encoder:
             self._log("ERROR", f"Error encoding: {str(e)}")
             import traceback
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
+            
+            # Clear process reference on error
+            with self._process_lock:
+                if self._current_process:
+                    try:
+                        self._close_pipes(self._current_process)
+                        if sys.platform == 'win32':
+                            self._kill_process_tree_windows(self._current_process.pid)
+                        else:
+                            self._current_process.kill()
+                    except Exception:
+                        pass
+                self._current_process = None
+            
             return False
     
     def _read_output(self, pipe, queue: Queue):
@@ -354,13 +420,112 @@ class Encoder:
         if self.log_callback:
             self.log_callback(level, message)
     
+    def _kill_process_tree_windows(self, pid: int):
+        """Kill process tree on Windows using taskkill or Windows API"""
+        try:
+            if HAS_PSUTIL:
+                # Use psutil for clean process tree killing
+                try:
+                    parent = psutil.Process(pid)
+                    children = parent.children(recursive=True)
+                    for child in children:
+                        try:
+                            child.terminate()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    try:
+                        parent.terminate()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                    # Wait a bit, then force kill
+                    gone, alive = psutil.wait_procs(children + [parent], timeout=2)
+                    for proc in alive:
+                        try:
+                            proc.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    return
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            
+            # Fallback: Use taskkill command on Windows
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+                pass
+        except Exception:
+            pass
+    
+    def _force_kill_process(self, process: subprocess.Popen):
+        """Forcefully kill a process and its children (runs in separate thread)"""
+        try:
+            if process.poll() is None:
+                # Process is still running, wait a bit for graceful termination
+                time.sleep(0.5)
+                
+                if process.poll() is None:
+                    # Still running, force kill
+                    if sys.platform == 'win32':
+                        # On Windows, kill the process tree
+                        self._kill_process_tree_windows(process.pid)
+                    else:
+                        # On Unix, try kill first, then SIGKILL
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    
+    def _close_pipes(self, process: subprocess.Popen):
+        """Close process pipes to unblock reading threads"""
+        try:
+            if process.stdout:
+                process.stdout.close()
+        except Exception:
+            pass
+        try:
+            if process.stderr:
+                process.stderr.close()
+        except Exception:
+            pass
+    
     def stop(self):
-        """Stop the current encoding"""
+        """Stop the current encoding with forceful termination"""
         self._stop_event.set()
+        
+        with self._process_lock:
+            if self._current_process:
+                try:
+                    # Close pipes to unblock reading threads
+                    self._close_pipes(self._current_process)
+                    
+                    # Terminate immediately, don't wait
+                    try:
+                        self._current_process.terminate()
+                    except Exception:
+                        pass
+                    
+                    # Force kill after short delay if still running
+                    # Use threading to avoid blocking GUI
+                    threading.Thread(
+                        target=self._force_kill_process,
+                        args=(self._current_process,),
+                        daemon=True
+                    ).start()
+                except Exception:
+                    pass
     
     def reset_stop_event(self):
         """Reset the stop event"""
         self._stop_event.clear()
+        with self._process_lock:
+            self._current_process = None
 
 
 def extract_subtitle_stream(
