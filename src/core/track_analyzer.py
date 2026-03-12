@@ -156,25 +156,24 @@ class TrackAnalyzer:
         # Process tracks to find English audio and Signs & Songs subtitle
         # Use mkvmerge track ID directly (matches FFmpeg stream index in MKV files)
         # Convert to 1-indexed for HandBrake compatibility (same as PowerShell script)
-        # Process tracks in order (as they appear in the file) to match PowerShell behavior
-        for track in sorted(tracks, key=lambda t: t["id"]):
+        sorted_tracks = sorted(tracks, key=lambda t: t["id"])
+        for track in sorted_tracks:
             if track["type"] == "audio" and audio_track is None:
                 is_english = self._is_english_track(track["language"], track["name"])
                 if is_english:
-                    # Return 1-indexed track number (mkvmerge track ID + 1)
-                    # This matches the PowerShell script behavior: $AudioTrackNumber = $CurrentTrackNumber + 1
                     audio_track = track["id"] + 1
-                    # Break after finding first English audio track (matches PowerShell behavior)
                     break
-            
-            if track["type"] == "subtitles" and subtitle_track is None:
-                is_english_sub = self._is_english_subtitle_track(track.get("language"), track.get("name"))
-                is_signs_songs = self._is_signs_songs_track(track.get("name"))
-                # Only set subtitle_track if BOTH conditions are met
-                if is_english_sub and is_signs_songs:
-                    subtitle_track = track["id"] + 1  # Convert to 1-indexed
-                    # Break after finding first matching subtitle track (similar to audio)
-                    break
+
+        # Subtitle: explicitly pick the first (by id) English subtitle that matches Signs & Songs.
+        # Return 0-based track id (HandBrake CLI expects 1-based; conversion at encode time).
+        for track in sorted_tracks:
+            if track["type"] != "subtitles":
+                continue
+            is_english_sub = self._is_english_subtitle_track(track.get("language"), track.get("name"))
+            is_signs_songs = self._is_signs_songs_track(track.get("name"))
+            if is_english_sub and is_signs_songs:
+                subtitle_track = track["id"]
+                break
         
         result = {
             "audio": audio_track,

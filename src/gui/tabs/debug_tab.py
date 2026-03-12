@@ -270,8 +270,12 @@ class DebugTab(ctk.CTkFrame):
         
         # Display analysis results
         analysis_text = f"File: {self.current_file.name}\n\n"
+        sub = tracks.get("subtitle")
         analysis_text += f"Audio Track: {tracks.get('audio', 'Not found')}\n"
-        analysis_text += f"Subtitle Track: {tracks.get('subtitle', 'Not found')}\n"
+        if sub is not None:
+            analysis_text += f"Subtitle Track: {sub} (HandBrake --subtitle {sub + 1})\n"
+        else:
+            analysis_text += "Subtitle Track: Not found\n"
         
         if tracks.get("error"):
             analysis_text += f"\nError: {tracks['error']}\n"

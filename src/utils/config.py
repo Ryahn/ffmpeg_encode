@@ -47,8 +47,10 @@ class Config:
             "ffmpeg_path": "",
             "handbrake_path": "",
             "mkvinfo_path": "",
+            "output_destination": "input_folder",
             "default_output_folder": "",
             "default_output_suffix": "_encoded",
+            "strip_leading_path_segments": 0,
             "encoding_mode": "sequential",
             "last_scan_folder": "",
             "skip_existing": False,
@@ -56,7 +58,7 @@ class Config:
             "audio_name_patterns": ["English", "ENG"],
             "audio_exclude_patterns": ["Japanese", "JPN", "日本語"],
             "subtitle_language_tags": ["en", "eng"],
-            "subtitle_name_patterns": ["Signs.*Song", "Signs$", "English Signs", "^Signs\\s*$"],
+            "subtitle_name_patterns": ["Signs.*Songs", "Signs.*Song", "Signs$", "English Signs", "^Signs\\s*$"],
             "subtitle_exclude_patterns": ["Japanese", "JPN", "日本語"]
         }
     
@@ -102,10 +104,23 @@ class Config:
         """Set mkvinfo executable path"""
         self.set("mkvinfo_path", path)
     
+    def get_output_destination(self) -> str:
+        """Get output destination: 'input_folder' or 'custom_folder'"""
+        if "output_destination" in self.config:
+            return self.get("output_destination", "input_folder")
+        folder = self.get("default_output_folder", "")
+        if folder and Path(folder).exists():
+            return "custom_folder"
+        return "input_folder"
+
+    def set_output_destination(self, destination: str):
+        """Set output destination: 'input_folder' or 'custom_folder'"""
+        self.set("output_destination", destination)
+
     def get_default_output_folder(self) -> str:
         """Get default output folder"""
         return self.get("default_output_folder", "")
-    
+
     def set_default_output_folder(self, folder: str):
         """Set default output folder"""
         self.set("default_output_folder", folder)
@@ -117,6 +132,20 @@ class Config:
     def set_default_output_suffix(self, suffix: str):
         """Set default output suffix"""
         self.set("default_output_suffix", suffix)
+
+    def get_strip_leading_path_segments(self) -> int:
+        """Get number of leading path segments to strip when preserving folder structure"""
+        value = self.get("strip_leading_path_segments", 0)
+        try:
+            n = int(value)
+            return max(0, min(99, n))
+        except (TypeError, ValueError):
+            return 0
+
+    def set_strip_leading_path_segments(self, value: int):
+        """Set number of leading path segments to strip (0-99)"""
+        n = max(0, min(99, int(value)))
+        self.set("strip_leading_path_segments", n)
     
     def get_encoding_mode(self) -> str:
         """Get encoding mode preference"""
@@ -176,7 +205,7 @@ class Config:
     
     def get_subtitle_name_patterns(self) -> list:
         """Get subtitle name patterns to match"""
-        return self.get("subtitle_name_patterns", ["Signs.*Song", "Signs$", "English Signs", "^Signs\\s*$"])
+        return self.get("subtitle_name_patterns", ["Signs.*Songs", "Signs.*Song", "Signs$", "English Signs", "^Signs\\s*$"])
     
     def set_subtitle_name_patterns(self, patterns: list):
         """Set subtitle name patterns to match"""

@@ -311,7 +311,18 @@ class HandBrakeTab(ctk.CTkFrame):
             
             # Update file data with track info
             file_data["audio_track"] = tracks["audio"]
-            file_data["subtitle_track"] = tracks.get("subtitle")
+            subtitle_track = tracks.get("subtitle")
+            if not subtitle_track and tracks.get("all_tracks"):
+                for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
+                    if track.get("type") == "subtitles":
+                        is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
+                        is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
+                        if is_eng and is_signs:
+                            subtitle_track = track["id"]
+                            self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected for {source_file.name}")
+                            tracks["subtitle"] = subtitle_track
+                            break
+            file_data["subtitle_track"] = subtitle_track
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             
@@ -340,7 +351,7 @@ class HandBrakeTab(ctk.CTkFrame):
                 preset_file=self.preset_path,
                 preset_name=self.preset_parser.get_preset_name(),
                 audio_track=tracks["audio"],
-                subtitle_track=tracks.get("subtitle"),
+                subtitle_track=subtitle_track,
                 dry_run=dry_run
             )
             

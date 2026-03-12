@@ -89,8 +89,9 @@ class Encoder:
             "--audio", str(audio_track)
         ]
         
-        if subtitle_track:
-            args.extend(["--subtitle", str(subtitle_track)])
+        if subtitle_track is not None:
+            # HandBrake CLI uses 1-based track numbers
+            args.extend(["--subtitle", str(subtitle_track + 1)])
             args.append("--subtitle-burned")
         
         return self._run_encoder(args, "HandBrake", output_file)

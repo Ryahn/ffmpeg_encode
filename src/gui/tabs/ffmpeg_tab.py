@@ -548,17 +548,15 @@ class FFmpegTab(ctk.CTkFrame):
             audio_track = tracks.get("audio")
             subtitle_track = tracks.get("subtitle")
             
-            # Fix: If subtitle track wasn't detected but should have been, find it manually
-            # This is a workaround for a bug in the track analyzer where it doesn't always detect subtitles correctly
+            # Fix: If subtitle track wasn't detected but should have been, find Signs & Songs manually (by id order)
             if not subtitle_track and tracks.get("all_tracks"):
-                for track in tracks["all_tracks"]:
-                    if track["type"] == "subtitles":
-                        is_eng = self.track_analyzer._is_english_subtitle_track(track["language"], track["name"])
-                        is_signs = self.track_analyzer._is_signs_songs_track(track["name"])
+                for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
+                    if track.get("type") == "subtitles":
+                        is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
+                        is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
                         if is_eng and is_signs:
-                            # This track should have been detected - set it manually
-                            subtitle_track = track["id"] + 1
-                            self._on_log("INFO", f"Subtitle track {subtitle_track} detected manually (track analyzer bug workaround)")
+                            subtitle_track = track["id"]
+                            self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected manually")
                             break
             
             # Debug: Log all tracks found
@@ -965,17 +963,15 @@ class FFmpegTab(ctk.CTkFrame):
             file_data["audio_track"] = tracks["audio"]
             subtitle_track = tracks.get("subtitle")
             
-            # Fix: If subtitle track wasn't detected but should have been, find it manually
-            # This is a workaround for a bug in the track analyzer where it doesn't always detect subtitles correctly
+            # Fix: If subtitle track wasn't detected, find Signs & Songs manually (by id order)
             if not subtitle_track and tracks.get("all_tracks"):
-                for track in tracks["all_tracks"]:
-                    if track["type"] == "subtitles":
+                for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
+                    if track.get("type") == "subtitles":
                         is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
                         is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
                         if is_eng and is_signs:
-                            subtitle_track = track["id"] + 1
-                            self._on_log("INFO", f"Subtitle track {subtitle_track} detected manually for {source_file.name}")
-                            # IMPORTANT: Update tracks dict so extraction code can find it
+                            subtitle_track = track["id"]
+                            self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected for {source_file.name}")
                             tracks["subtitle"] = subtitle_track
                             break
             
@@ -1003,9 +999,9 @@ class FFmpegTab(ctk.CTkFrame):
             
             # Extract subtitle if needed
             subtitle_file = None
-            if tracks.get("subtitle") and not dry_run:
-                subtitle_stream_id = tracks["subtitle"] - 1  # Convert to 0-indexed
-                self._on_log("INFO", f"Extracting subtitle stream {subtitle_stream_id} (track {tracks['subtitle']})")
+            if tracks.get("subtitle") is not None and not dry_run:
+                subtitle_stream_id = tracks["subtitle"]  # Already 0-based
+                self._on_log("INFO", f"Extracting subtitle stream {subtitle_stream_id} (HandBrake track {subtitle_stream_id + 1})")
                 subtitle_file = extract_subtitle_stream(
                     ffmpeg_path=ffmpeg_path,
                     input_file=source_file,
