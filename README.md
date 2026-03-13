@@ -4,7 +4,7 @@ A cross-platform Python GUI application for encoding video files using HandBrake
 
 ## Features
 
-- **Cross-platform**: Works on Windows and macOS
+- **Cross-platform**: Works on Windows, macOS, and Linux
 - **Dual encoder support**: Use HandBrake or FFmpeg
 - **HandBrake preset support**: Load and use HandBrake JSON presets
 - **Preset management**: Dropdown selection with auto-save and last-used preset auto-loading
@@ -28,9 +28,9 @@ A cross-platform Python GUI application for encoding video files using HandBrake
 ## Requirements
 
 - Python 3.8 or higher
-- FFmpeg (auto-installed via Chocolatey/Homebrew)
-- HandBrake CLI (auto-installed via Chocolatey/Homebrew)
-- MKVToolNix (auto-installed via Chocolatey/Homebrew)
+- FFmpeg (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install via your system package manager, e.g. `apt install ffmpeg`)
+- HandBrake CLI (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install via your package manager, e.g. `apt install handbrake-cli`)
+- MKVToolNix (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install the package that provides `mkvinfo`, e.g. `apt install mkvtoolnix`)
 
 ## Installation
 
@@ -52,11 +52,14 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
+**Linux:** The same steps apply. Install FFmpeg, HandBrake CLI, and MKVToolNix with your package manager if needed; **Auto-detect** in Settings will find them if they are on PATH.
+
 ### Option 2: Use Pre-built Executables
 
 Download the latest release from the [Releases](https://github.com/yourusername/ffmpeg_encode/releases) page:
 - **Windows**: Download `ffmpeg_encode-portable.exe` (portable) or `ffmpeg_encode-Setup.exe` (installer)
 - **macOS**: Download `ffmpeg_encode.dmg` (disk image) or `ffmpeg_encode.zip` (app bundle)
+- **Linux**: Run from source (see Option 1 above)
 
 The application will automatically detect and offer to install missing dependencies (FFmpeg, HandBrake, mkvinfo) via:
 - **Windows**: Chocolatey
@@ -154,6 +157,7 @@ If FFmpeg, HandBrake, or mkvinfo are not found:
 3. Install missing dependencies:
    - **Windows**: Use Chocolatey (`choco install ffmpeg handbrake-cli mkvtoolnix`)
    - **macOS**: Use Homebrew (`brew install ffmpeg handbrake mkvtoolnix`)
+   - **Linux**: Use your system package manager (e.g. on Debian/Ubuntu: `apt install ffmpeg handbrake-cli mkvtoolnix`; on Fedora: `dnf install ffmpeg HandBrake-cli mkvtoolnix`; on Arch: `pacman -S ffmpeg handbrake-cli mkvtoolnix`). Then use **Auto-detect** or **Browse** in Settings to set the paths.
 
 ### Track Detection Issues
 

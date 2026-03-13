@@ -12,7 +12,7 @@ The Video Encoder GUI is a cross-platform application for encoding video files u
 
 1. **Install Dependencies**: The application requires FFmpeg, HandBrake CLI, and MKVToolNix (mkvinfo). These can be:
    - Auto-detected if already installed
-   - Installed via package managers (Chocolatey on Windows, Homebrew on macOS)
+   - Installed via package managers (Chocolatey on Windows, Homebrew on macOS, or your system package manager on Linux, e.g. apt, dnf)
    - Manually configured in the Settings tab
 
 2. **Configure Paths**: On first launch, go to the **Settings** tab and configure paths to:
@@ -194,10 +194,10 @@ This section contains paths to external tools required by the application. Each 
 Enter the full path to the FFmpeg executable, or use the Browse/Auto-detect buttons to find it. FFmpeg is used for encoding when using the FFmpeg tab.
 
 ### Step 3: HandBrake CLI path
-Enter the full path to the HandBrake CLI executable (HandBrakeCLI.exe on Windows). HandBrake is used for encoding when using the HandBrake tab.
+Enter the full path to the HandBrake CLI executable (HandBrakeCLI.exe on Windows; on Linux and macOS the executable is typically named HandBrakeCLI with no extension). HandBrake is used for encoding when using the HandBrake tab.
 
 ### Step 4: mkvinfo path
-Enter the full path to the mkvinfo executable (part of MKVToolNix). mkvinfo is used to analyze MKV files and detect audio/subtitle tracks.
+Enter the full path to the mkvinfo executable (part of MKVToolNix; on Linux and macOS the executable is typically named mkvinfo with no extension). mkvinfo is used to analyze MKV files and detect audio/subtitle tracks.
 
 ### Step 5: Browse for path
 Click **Browse** next to any executable path to manually select the executable file using a file dialog.
