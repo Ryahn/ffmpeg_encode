@@ -47,6 +47,7 @@ class Config:
             "ffmpeg_path": "",
             "handbrake_path": "",
             "mkvinfo_path": "",
+            "mediainfo_path": "",
             "output_destination": "input_folder",
             "default_output_folder": "",
             "default_output_suffix": "_encoded",
@@ -104,7 +105,15 @@ class Config:
     def set_mkvinfo_path(self, path: str):
         """Set mkvinfo executable path"""
         self.set("mkvinfo_path", path)
-    
+
+    def get_mediainfo_path(self) -> str:
+        """Get MediaInfo executable path"""
+        return self.get("mediainfo_path", "")
+
+    def set_mediainfo_path(self, path: str):
+        """Set MediaInfo executable path"""
+        self.set("mediainfo_path", path)
+
     def get_output_destination(self) -> str:
         """Get output destination: 'input_folder' or 'custom_folder'"""
         if "output_destination" in self.config:

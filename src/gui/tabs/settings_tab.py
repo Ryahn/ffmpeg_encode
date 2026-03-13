@@ -77,7 +77,19 @@ class SettingsTab(ctk.CTkFrame):
             "If not found, can be installed via Chocolatey (Windows) or Homebrew (Mac)."
         )
         self.mkvinfo_entry.bind("<FocusOut>", lambda e: self._on_mkvinfo_path_changed())
-        
+
+        # MediaInfo path
+        self.mediainfo_entry = self._create_path_setting(
+            path_frame,
+            "MediaInfo:",
+            config.get_mediainfo_path(),
+            self._browse_mediainfo,
+            self._auto_detect_mediainfo,
+            "Path to the MediaInfo executable.\n"
+            "Used in the Debug tab to dump media info. If not set, the app will look for mediainfo on PATH."
+        )
+        self.mediainfo_entry.bind("<FocusOut>", lambda e: self._on_mediainfo_path_changed())
+
         # Output settings section
         output_frame = ctk.CTkFrame(scrollable)
         output_frame.pack(fill="x", pady=10)
@@ -413,7 +425,33 @@ class SettingsTab(ctk.CTkFrame):
             from tkinter import messagebox
             messagebox.showinfo("Not Found", "mkvinfo not found. Would you like to install it?")
             # TODO: Offer to install
-    
+
+    def _browse_mediainfo(self, entry):
+        """Browse for MediaInfo executable"""
+        file = filedialog.askopenfilename(
+            title="Select MediaInfo executable",
+            filetypes=[("Executable", "*.exe"), ("All files", "*.*")]
+        )
+        if file:
+            entry.delete(0, "end")
+            entry.insert(0, file)
+            config.set_mediainfo_path(file)
+
+    def _auto_detect_mediainfo(self, entry):
+        """Auto-detect MediaInfo from PATH or common locations"""
+        import shutil
+        path = config.get_mediainfo_path()
+        if path and Path(path).exists():
+            return
+        path = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
+        if path:
+            entry.delete(0, "end")
+            entry.insert(0, path)
+            config.set_mediainfo_path(path)
+        else:
+            from tkinter import messagebox
+            messagebox.showinfo("Not Found", "MediaInfo not found on PATH. Set the path manually or install MediaInfo.")
+
     def _on_suffix_changed(self, event=None):
         """Handle suffix change"""
         suffix = self.suffix_entry.get()
@@ -497,7 +535,12 @@ class SettingsTab(ctk.CTkFrame):
         """Handle mkvinfo path change (when entry loses focus)"""
         path = self.mkvinfo_entry.get().strip()
         config.set_mkvinfo_path(path)
-    
+
+    def _on_mediainfo_path_changed(self):
+        """Handle MediaInfo path change (when entry loses focus)"""
+        path = self.mediainfo_entry.get().strip()
+        config.set_mediainfo_path(path)
+
     def _save_all_settings(self):
         """Explicitly save all current settings"""
         try:
@@ -505,7 +548,8 @@ class SettingsTab(ctk.CTkFrame):
             config.set_ffmpeg_path(self.ffmpeg_entry.get().strip())
             config.set_handbrake_path(self.handbrake_entry.get().strip())
             config.set_mkvinfo_path(self.mkvinfo_entry.get().strip())
-            
+            config.set_mediainfo_path(self.mediainfo_entry.get().strip())
+
             # Save other settings (these should already be saved automatically, but ensure they are)
             config.set_default_output_suffix(self.suffix_entry.get())
             config.set_encoding_mode(self.mode_var.get())

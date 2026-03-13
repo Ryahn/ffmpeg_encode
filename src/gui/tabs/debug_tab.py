@@ -143,11 +143,15 @@ class DebugTab(ctk.CTkFrame):
             self.mediainfo_text.insert("1.0", "No file selected or file does not exist. Select a file and click Analyze first.")
             self.mediainfo_text.configure(state="disabled")
             return
-        mediainfo_path = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
+        mediainfo_path = config.get_mediainfo_path()
+        if mediainfo_path and Path(mediainfo_path).exists():
+            mediainfo_path = str(Path(mediainfo_path).resolve())
+        else:
+            mediainfo_path = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
         if not mediainfo_path:
             self.mediainfo_text.configure(state="normal")
             self.mediainfo_text.delete("1.0", "end")
-            self.mediainfo_text.insert("1.0", "mediainfo not found. Install MediaInfo and ensure it is on PATH.")
+            self.mediainfo_text.insert("1.0", "MediaInfo not found. Set the path in Settings → Executable Paths → MediaInfo, or install MediaInfo and add it to PATH.")
             self.mediainfo_text.configure(state="disabled")
             return
         run_kw = {
