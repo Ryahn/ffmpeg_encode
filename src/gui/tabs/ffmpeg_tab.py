@@ -1134,7 +1134,10 @@ class FFmpegTab(ctk.CTkFrame):
         """Parse command string and substitute placeholders with actual values"""
         # Replace common placeholders
         command = command_template
-        
+
+        # FFmpeg 8+ removed the scale filter 'si' (scale interpolation) option; strip it so saved commands work
+        command = re.sub(r'(scale=[^,\s\'"]+):si=\d+', r'\1', command)
+
         # Helper function to escape backslashes for regex replacement
         # Windows paths like C:\Users need backslashes escaped to avoid \U being interpreted as Unicode escape
         def escape_for_replacement(path_str: str) -> str:
@@ -1266,8 +1269,9 @@ class FFmpegTab(ctk.CTkFrame):
     
     def _on_log(self, level: str, message: str):
         """Handle log message"""
+        if level == "DEBUG" and not config.get_debug_logging():
+            return
         self.log_viewer.add_log(level, message)
-        # Map log level to appropriate logger method
         prefixed_message = f"[FFmpeg] {message}"
         if level == "ERROR":
             logger.error(prefixed_message)

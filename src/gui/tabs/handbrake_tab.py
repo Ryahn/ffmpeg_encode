@@ -400,8 +400,9 @@ class HandBrakeTab(ctk.CTkFrame):
     
     def _on_log(self, level: str, message: str):
         """Handle log message"""
+        if level == "DEBUG" and not config.get_debug_logging():
+            return
         self.log_viewer.add_log(level, message)
-        # Map log level to appropriate logger method
         prefixed_message = f"[HandBrake] {message}"
         if level == "ERROR":
             logger.error(prefixed_message)

@@ -173,6 +173,16 @@ class SettingsTab(ctk.CTkFrame):
             variable=self.skip_var,
             command=self._on_skip_changed
         ).pack(anchor="w")
+
+        debug_frame = ctk.CTkFrame(encoding_frame)
+        debug_frame.pack(fill="x", padx=10, pady=5)
+        self.debug_var = ctk.BooleanVar(value=config.get_debug_logging())
+        ctk.CTkCheckBox(
+            debug_frame,
+            text="Enable debug logging",
+            variable=self.debug_var,
+            command=self._on_debug_logging_changed
+        ).pack(anchor="w")
         
         # Track detection settings section
         track_frame = ctk.CTkFrame(scrollable)
@@ -466,6 +476,10 @@ class SettingsTab(ctk.CTkFrame):
         """Handle skip existing change"""
         value = self.skip_var.get()
         config.set_skip_existing(value)
+
+    def _on_debug_logging_changed(self):
+        """Handle enable debug logging change"""
+        config.set_debug_logging(self.debug_var.get())
     
     def _create_list_setting(self, parent, label, value_list, callback, help_text: str = None):
         """Create a list setting row (comma-separated)"""
@@ -554,6 +568,7 @@ class SettingsTab(ctk.CTkFrame):
             config.set_default_output_suffix(self.suffix_entry.get())
             config.set_encoding_mode(self.mode_var.get())
             config.set_skip_existing(self.skip_var.get())
+            config.set_debug_logging(self.debug_var.get())
             
             messagebox.showinfo("Settings Saved", "All settings have been saved successfully!")
         except Exception as e:

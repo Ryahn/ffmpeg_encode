@@ -3,29 +3,33 @@
 import customtkinter as ctk
 from typing import Optional
 
+MAX_LINES = 5000
+
 
 class LogViewer(ctk.CTkTextbox):
     """Real-time log viewer with color coding"""
-    
+
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
         self.configure(state="disabled")
-        # Note: CTkTextbox doesn't support tag_config like tkinter Text
-        # We'll use plain text for now, color coding can be added later
-    
+
     def add_log(self, level: str, message: str):
         """Add a log entry"""
         self.configure(state="normal")
-        
-        # Format message
+
         formatted = f"[{level}] {message}\n"
-        
-        # Insert text
         self.insert("end", formatted)
-        
-        # Auto-scroll to bottom
+
+        try:
+            end_index = self.index("end-1c")
+            line_num = int(end_index.split(".")[0])
+            if line_num > MAX_LINES:
+                drop_count = line_num - MAX_LINES
+                self.delete("1.0", f"{drop_count + 1}.0")
+        except (ValueError, IndexError):
+            pass
+
         self.see("end")
-        
         self.configure(state="disabled")
     
     def clear(self):

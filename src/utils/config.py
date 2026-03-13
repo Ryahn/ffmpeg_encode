@@ -55,6 +55,7 @@ class Config:
             "encoding_mode": "sequential",
             "last_scan_folder": "",
             "skip_existing": False,
+            "debug_logging": False,
             "allow_japanese_audio_with_english_subs": False,
             "audio_language_tags": ["en", "eng"],
             "audio_name_patterns": ["English", "ENG"],
@@ -180,6 +181,14 @@ class Config:
     def set_skip_existing(self, value: bool):
         """Set skip existing files preference"""
         self.set("skip_existing", value)
+
+    def get_debug_logging(self) -> bool:
+        """Get whether debug log level is shown in the app log viewer"""
+        return self.get("debug_logging", False)
+
+    def set_debug_logging(self, value: bool):
+        """Set whether debug log level is shown in the app log viewer"""
+        self.set("debug_logging", value)
 
     def get_allow_japanese_audio_with_english_subs(self) -> bool:
         """When True, encode with first audio track + English subs when no English audio is found"""

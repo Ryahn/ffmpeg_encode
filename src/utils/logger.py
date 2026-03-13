@@ -2,9 +2,12 @@
 
 import logging
 import os
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+LOG_BUFFER_MAXLEN = 10_000
 
 
 class Logger:
@@ -53,7 +56,7 @@ class Logger:
         self.logger.addHandler(console_handler)
         
         self.log_file = log_file
-        self._log_buffer = []
+        self._log_buffer: deque = deque(maxlen=LOG_BUFFER_MAXLEN)
     
     def info(self, message: str):
         """Log info message"""
@@ -86,7 +89,8 @@ class Logger:
     
     def get_recent_logs(self, count: int = 100) -> list:
         """Get recent log entries"""
-        return self._log_buffer[-count:]
+        buf = list(self._log_buffer)
+        return buf[-count:]
     
     def clear_buffer(self):
         """Clear the log buffer"""
