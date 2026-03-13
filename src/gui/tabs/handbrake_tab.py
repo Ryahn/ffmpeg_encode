@@ -318,14 +318,23 @@ class HandBrakeTab(ctk.CTkFrame):
             # Update file data with track info
             file_data["audio_track"] = effective_audio
             subtitle_track = tracks.get("subtitle")
+            using_japanese_audio = effective_audio == tracks.get("first_audio") and not tracks.get("audio")
             if not subtitle_track and tracks.get("all_tracks"):
                 for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
-                    if track.get("type") == "subtitles":
-                        is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
-                        is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
-                        if is_eng and is_signs:
+                    if track.get("type") != "subtitles":
+                        continue
+                    is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
+                    is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
+                    if is_eng and is_signs:
+                        subtitle_track = track["id"]
+                        self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected for {source_file.name}")
+                        tracks["subtitle"] = subtitle_track
+                        break
+                if not subtitle_track and using_japanese_audio:
+                    for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
+                        if track.get("type") == "subtitles" and self.track_analyzer._matches_english_subtitle_language(track.get("language")):
                             subtitle_track = track["id"]
-                            self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected for {source_file.name}")
+                            self._on_log("INFO", f"Japanese-audio mode: using first English subtitle track {subtitle_track} for {source_file.name}")
                             tracks["subtitle"] = subtitle_track
                             break
             file_data["subtitle_track"] = subtitle_track

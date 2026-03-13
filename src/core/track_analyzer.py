@@ -237,26 +237,30 @@ class TrackAnalyzer:
         
         return False
     
+    def _matches_english_subtitle_language(self, language: Optional[str]) -> bool:
+        """True if the track's language tag is English (no exclude check). Used when Japanese-audio mode needs first English sub."""
+        if not language:
+            return False
+        lang_lower = language.lower()
+        for tag in config.get_subtitle_language_tags():
+            if lang_lower == tag.lower() or lang_lower.startswith(tag.lower() + "-") or lang_lower.startswith(tag.lower() + "_"):
+                return True
+        return False
+
     def _is_english_subtitle_track(self, language: Optional[str], name: Optional[str]) -> bool:
-        """Check if a subtitle track is English using configurable patterns"""
-        # Get configurable patterns
+        """Check if a subtitle track is English using configurable patterns (language + exclude by name)."""
         lang_tags = config.get_subtitle_language_tags()
         exclude_patterns = config.get_subtitle_exclude_patterns()
-        
-        # Check language tag (primary method for determining English subtitles)
+
         if language:
             lang_lower = language.lower()
             for tag in lang_tags:
                 if lang_lower == tag.lower() or lang_lower.startswith(tag.lower() + "-") or lang_lower.startswith(tag.lower() + "_"):
-                    # Language matches, but check if it's excluded by name
                     if name:
                         for exclude_pattern in exclude_patterns:
                             if re.search(exclude_pattern, name, re.IGNORECASE):
                                 return False
                     return True
-        
-        # If no language tag or doesn't match, return False
-        # (We don't check name patterns here because those are for Signs & Songs detection, not English detection)
         return False
     
     def _analyze_with_ffprobe(self, file_path: Path) -> Dict[str, Optional[int]]:

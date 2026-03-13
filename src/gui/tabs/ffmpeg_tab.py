@@ -552,16 +552,24 @@ class FFmpegTab(ctk.CTkFrame):
                 audio_track = tracks["first_audio"]
                 self._on_log("INFO", f"No English audio; using first audio track ({audio_track}) with English subs")
             subtitle_track = tracks.get("subtitle")
+            using_japanese_audio = audio_track == tracks.get("first_audio") and not tracks.get("audio")
 
-            # Fix: If subtitle track wasn't detected but should have been, find Signs & Songs manually (by id order)
             if not subtitle_track and tracks.get("all_tracks"):
                 for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
-                    if track.get("type") == "subtitles":
-                        is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
-                        is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
-                        if is_eng and is_signs:
+                    if track.get("type") != "subtitles":
+                        continue
+                    is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
+                    is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
+                    if is_eng and is_signs:
+                        subtitle_track = track["id"]
+                        self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected manually")
+                        break
+                if not subtitle_track and using_japanese_audio:
+                    for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
+                        if track.get("type") == "subtitles" and self.track_analyzer._matches_english_subtitle_language(track.get("language")):
                             subtitle_track = track["id"]
-                            self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected manually")
+                            tracks["subtitle"] = subtitle_track
+                            self._on_log("INFO", f"Japanese-audio mode: using first English subtitle track {subtitle_track}")
                             break
 
             # Debug: Log all tracks found
@@ -970,19 +978,26 @@ class FFmpegTab(ctk.CTkFrame):
             # Update file data with track info
             file_data["audio_track"] = effective_audio
             subtitle_track = tracks.get("subtitle")
-            
-            # Fix: If subtitle track wasn't detected, find Signs & Songs manually (by id order)
+            using_japanese_audio = effective_audio == tracks.get("first_audio") and not tracks.get("audio")
+
             if not subtitle_track and tracks.get("all_tracks"):
                 for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
-                    if track.get("type") == "subtitles":
-                        is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
-                        is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
-                        if is_eng and is_signs:
+                    if track.get("type") != "subtitles":
+                        continue
+                    is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
+                    is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
+                    if is_eng and is_signs:
+                        subtitle_track = track["id"]
+                        self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected for {source_file.name}")
+                        tracks["subtitle"] = subtitle_track
+                        break
+                if not subtitle_track and using_japanese_audio:
+                    for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
+                        if track.get("type") == "subtitles" and self.track_analyzer._matches_english_subtitle_language(track.get("language")):
                             subtitle_track = track["id"]
-                            self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected for {source_file.name}")
+                            self._on_log("INFO", f"Japanese-audio mode: using first English subtitle track {subtitle_track} for {source_file.name}")
                             tracks["subtitle"] = subtitle_track
                             break
-            
             file_data["subtitle_track"] = subtitle_track
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
@@ -1005,10 +1020,10 @@ class FFmpegTab(ctk.CTkFrame):
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             
-            # Extract subtitle if needed
+            # Extract subtitle when we have a selected track (Signs & Songs when toggle off, or Signs & Songs / first English when toggle on)
             subtitle_file = None
-            if tracks.get("subtitle") is not None and not dry_run:
-                subtitle_stream_id = tracks["subtitle"]  # Already 0-based
+            if subtitle_track is not None and not dry_run:
+                subtitle_stream_id = subtitle_track  # 0-based
                 self._on_log("INFO", f"Extracting subtitle stream {subtitle_stream_id} (HandBrake track {subtitle_stream_id + 1})")
                 subtitle_file = extract_subtitle_stream(
                     ffmpeg_path=ffmpeg_path,
@@ -1043,7 +1058,7 @@ class FFmpegTab(ctk.CTkFrame):
                     source_file,
                     output_file,
                     effective_audio,
-                    tracks.get("subtitle"),
+                    subtitle_track,
                     subtitle_file
                 )
                 if not ffmpeg_args:
