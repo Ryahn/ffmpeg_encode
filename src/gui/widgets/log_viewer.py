@@ -44,3 +44,14 @@ class LogViewer(ctk.CTkTextbox):
         except Exception:
             return False
 
+    def copy_to_clipboard(self):
+        """Copy log content to clipboard so user can paste (e.g. Ctrl+V)."""
+        try:
+            content = self.get("1.0", "end-1c")
+            if content.strip():
+                root = self.winfo_toplevel()
+                root.clipboard_clear()
+                root.clipboard_append(content)
+        except Exception:
+            pass
+

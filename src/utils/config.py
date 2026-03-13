@@ -54,6 +54,7 @@ class Config:
             "encoding_mode": "sequential",
             "last_scan_folder": "",
             "skip_existing": False,
+            "allow_japanese_audio_with_english_subs": False,
             "audio_language_tags": ["en", "eng"],
             "audio_name_patterns": ["English", "ENG"],
             "audio_exclude_patterns": ["Japanese", "JPN", "日本語"],
@@ -166,11 +167,19 @@ class Config:
     def get_skip_existing(self) -> bool:
         """Get skip existing files preference"""
         return self.get("skip_existing", False)
-    
+
     def set_skip_existing(self, value: bool):
         """Set skip existing files preference"""
         self.set("skip_existing", value)
-    
+
+    def get_allow_japanese_audio_with_english_subs(self) -> bool:
+        """When True, encode with first audio track + English subs when no English audio is found"""
+        return self.get("allow_japanese_audio_with_english_subs", False)
+
+    def set_allow_japanese_audio_with_english_subs(self, value: bool):
+        """Set allow Japanese audio with English subs"""
+        self.set("allow_japanese_audio_with_english_subs", value)
+
     def get_audio_language_tags(self) -> list:
         """Get audio language tags to match"""
         return self.get("audio_language_tags", ["en", "eng"])

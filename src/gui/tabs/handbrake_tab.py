@@ -142,14 +142,15 @@ class HandBrakeTab(ctk.CTkFrame):
         # Log viewer
         log_frame = ctk.CTkFrame(self)
         log_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
+        self.log_viewer = LogViewer(log_frame, height=200)
+        log_header = ctk.CTkFrame(log_frame)
+        log_header.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(
-            log_frame,
+            log_header,
             text="Encoding Log",
             font=ctk.CTkFont(size=14, weight="bold")
-        ).pack(anchor="w", padx=10, pady=5)
-        
-        self.log_viewer = LogViewer(log_frame, height=200)
+        ).pack(side="left", padx=(0, 10), pady=0)
+        ctk.CTkButton(log_header, text="Copy", width=70, command=self.log_viewer.copy_to_clipboard).pack(side="left")
         self.log_viewer.pack(fill="both", expand=True, padx=10, pady=10)
         
         # Initialize encoder
@@ -303,14 +304,19 @@ class HandBrakeTab(ctk.CTkFrame):
                 self._on_log("ERROR", f"Track analysis failed: {tracks['error']}")
                 file_data["status"] = "Error"
                 continue
-            
-            if not tracks.get("audio"):
+
+            from utils.config import config
+            effective_audio = tracks.get("audio")
+            if not effective_audio and config.get_allow_japanese_audio_with_english_subs() and tracks.get("first_audio"):
+                effective_audio = tracks["first_audio"]
+                self._on_log("INFO", f"No English audio; using first audio track ({effective_audio}) with English subs for: {source_file.name}")
+            if not effective_audio:
                 self._on_log("WARNING", f"No English audio track found for: {source_file.name}")
                 file_data["status"] = "Skipped"
                 continue
-            
+
             # Update file data with track info
-            file_data["audio_track"] = tracks["audio"]
+            file_data["audio_track"] = effective_audio
             subtitle_track = tracks.get("subtitle")
             if not subtitle_track and tracks.get("all_tracks"):
                 for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
@@ -350,7 +356,7 @@ class HandBrakeTab(ctk.CTkFrame):
                 output_file=output_file,
                 preset_file=self.preset_path,
                 preset_name=self.preset_parser.get_preset_name(),
-                audio_track=tracks["audio"],
+                audio_track=effective_audio,
                 subtitle_track=subtitle_track,
                 dry_run=dry_run
             )

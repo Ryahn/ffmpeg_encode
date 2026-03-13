@@ -155,14 +155,18 @@ class TrackAnalyzer:
         
         # Process tracks to find English audio and Signs & Songs subtitle
         # Use mkvmerge track ID directly (matches FFmpeg stream index in MKV files)
-        # Convert to 1-indexed for HandBrake compatibility (same as PowerShell script)
+        # Audio: 1-based for HandBrake CLI. Also record first audio track for "Japanese + English subs" mode.
         sorted_tracks = sorted(tracks, key=lambda t: t["id"])
+        first_audio_track = None
         for track in sorted_tracks:
-            if track["type"] == "audio" and audio_track is None:
-                is_english = self._is_english_track(track["language"], track["name"])
-                if is_english:
-                    audio_track = track["id"] + 1
-                    break
+            if track["type"] == "audio":
+                if first_audio_track is None:
+                    first_audio_track = track["id"] + 1
+                if audio_track is None:
+                    is_english = self._is_english_track(track["language"], track["name"])
+                    if is_english:
+                        audio_track = track["id"] + 1
+                        break
 
         # Subtitle: explicitly pick the first (by id) English subtitle that matches Signs & Songs.
         # Return 0-based track id (HandBrake CLI expects 1-based; conversion at encode time).
@@ -177,9 +181,10 @@ class TrackAnalyzer:
         
         result = {
             "audio": audio_track,
+            "first_audio": first_audio_track,
             "subtitle": subtitle_track,
             "error": None,
-            "all_tracks": tracks  # For debugging
+            "all_tracks": tracks
         }
         # Debug: log what's being returned
         import logging

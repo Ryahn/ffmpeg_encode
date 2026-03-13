@@ -7,6 +7,7 @@ from typing import Optional
 import os
 import sys
 import subprocess
+import shutil
 from core.track_analyzer import TrackAnalyzer
 from utils.config import config
 from utils.logger import logger
@@ -60,17 +61,24 @@ class DebugTab(ctk.CTkFrame):
         
         # mkvinfo output tab
         self.results_tabs.add("mkvinfo Output")
+        mkvinfo_tab = self.results_tabs.tab("mkvinfo Output")
+        mkvinfo_btn_frame = ctk.CTkFrame(mkvinfo_tab)
+        mkvinfo_btn_frame.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkButton(mkvinfo_btn_frame, text="Copy", width=80, command=lambda: self._copy_text(self.mkvinfo_text)).pack(side="left", padx=(0, 5), pady=5)
         self.mkvinfo_text = ctk.CTkTextbox(
-            self.results_tabs.tab("mkvinfo Output"),
+            mkvinfo_tab,
             font=ctk.CTkFont(family="Courier", size=10)
         )
         self.mkvinfo_text.pack(fill="both", expand=True, padx=10, pady=10)
-        
+
         # Track analysis tab
         self.results_tabs.add("Track Analysis")
-        analysis_frame = ctk.CTkScrollableFrame(self.results_tabs.tab("Track Analysis"))
+        analysis_tab = self.results_tabs.tab("Track Analysis")
+        analysis_btn_frame = ctk.CTkFrame(analysis_tab)
+        analysis_btn_frame.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkButton(analysis_btn_frame, text="Copy", width=80, command=self._copy_analysis).pack(side="left", padx=(0, 5), pady=5)
+        analysis_frame = ctk.CTkScrollableFrame(analysis_tab)
         analysis_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
         self.analysis_label = ctk.CTkLabel(
             analysis_frame,
             text="Select a file and click Analyze to see track analysis",
@@ -78,12 +86,89 @@ class DebugTab(ctk.CTkFrame):
             justify="left"
         )
         self.analysis_label.pack(fill="x", padx=10, pady=10)
-        
+        self._last_analysis_text = ""
+
+        # MediaInfo tab
+        self.results_tabs.add("MediaInfo")
+        self._setup_mediainfo_tab()
+
         # Log files tab
         self.results_tabs.add("Log Files")
         self._setup_log_tab()
-        
+
         self.current_file: Optional[Path] = None
+
+    def _copy_text(self, textbox: ctk.CTkTextbox) -> None:
+        """Copy textbox content to clipboard (or selection if any)."""
+        try:
+            text = textbox.get("1.0", "end-1c")
+            if text.strip():
+                root = self.winfo_toplevel()
+                root.clipboard_clear()
+                root.clipboard_append(text)
+        except Exception:
+            pass
+
+    def _copy_analysis(self) -> None:
+        """Copy last track analysis text to clipboard."""
+        if not self._last_analysis_text:
+            return
+        try:
+            root = self.winfo_toplevel()
+            root.clipboard_clear()
+            root.clipboard_append(self._last_analysis_text)
+        except Exception:
+            pass
+
+    def _setup_mediainfo_tab(self) -> None:
+        """Setup MediaInfo tab: run mediainfo on current file, show output, Copy button."""
+        mi_tab = self.results_tabs.tab("MediaInfo")
+        mi_btn_frame = ctk.CTkFrame(mi_tab)
+        mi_btn_frame.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkButton(mi_btn_frame, text="Run MediaInfo", width=120, command=self._run_mediainfo).pack(side="left", padx=(0, 5), pady=5)
+        ctk.CTkButton(mi_btn_frame, text="Copy", width=80, command=lambda: self._copy_text(self.mediainfo_text)).pack(side="left", padx=(0, 5), pady=5)
+        self.mediainfo_text = ctk.CTkTextbox(
+            mi_tab,
+            font=ctk.CTkFont(family="Courier", size=10)
+        )
+        self.mediainfo_text.pack(fill="both", expand=True, padx=10, pady=10)
+        self.mediainfo_text.insert("1.0", "Select a file and click Analyze, then use 'Run MediaInfo' to dump output here.")
+        self.mediainfo_text.configure(state="disabled")
+
+    def _run_mediainfo(self) -> None:
+        """Run mediainfo on current file and show output."""
+        if not self.current_file or not self.current_file.exists():
+            self.mediainfo_text.configure(state="normal")
+            self.mediainfo_text.delete("1.0", "end")
+            self.mediainfo_text.insert("1.0", "No file selected or file does not exist. Select a file and click Analyze first.")
+            self.mediainfo_text.configure(state="disabled")
+            return
+        mediainfo_path = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
+        if not mediainfo_path:
+            self.mediainfo_text.configure(state="normal")
+            self.mediainfo_text.delete("1.0", "end")
+            self.mediainfo_text.insert("1.0", "mediainfo not found. Install MediaInfo and ensure it is on PATH.")
+            self.mediainfo_text.configure(state="disabled")
+            return
+        run_kw = {
+            "args": [mediainfo_path, str(self.current_file)],
+            "capture_output": True,
+            "text": True,
+            "timeout": 30,
+        }
+        if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            run_kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            result = subprocess.run(**run_kw)
+            out = result.stdout or result.stderr or "(no output)"
+        except subprocess.TimeoutExpired:
+            out = "mediainfo timed out."
+        except Exception as e:
+            out = f"Error running mediainfo: {e}"
+        self.mediainfo_text.configure(state="normal")
+        self.mediainfo_text.delete("1.0", "end")
+        self.mediainfo_text.insert("1.0", out)
+        self.mediainfo_text.configure(state="disabled")
     
     def _setup_log_tab(self):
         """Setup the log files tab"""
@@ -143,7 +228,13 @@ class DebugTab(ctk.CTkFrame):
             command=self._refresh_log_view,
             width=150
         ).pack(side="left", padx=5)
-        
+        ctk.CTkButton(
+            button_frame,
+            text="Copy",
+            width=80,
+            command=lambda: self._copy_text(self.log_display)
+        ).pack(side="left", padx=5)
+
         # Recent logs display
         log_display_frame = ctk.CTkFrame(log_tab)
         log_display_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -314,6 +405,7 @@ class DebugTab(ctk.CTkFrame):
         analysis_text += f"Subtitle Language Tags: {', '.join(config.get_subtitle_language_tags())}\n"
         analysis_text += f"Subtitle Name Patterns: {', '.join(config.get_subtitle_name_patterns())}\n"
         analysis_text += f"Subtitle Exclude Patterns: {', '.join(config.get_subtitle_exclude_patterns())}\n"
-        
+
+        self._last_analysis_text = analysis_text
         self.analysis_label.configure(text=analysis_text)
 

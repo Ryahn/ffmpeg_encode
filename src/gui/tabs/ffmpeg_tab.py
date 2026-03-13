@@ -330,13 +330,15 @@ class FFmpegTab(ctk.CTkFrame):
         log_frame = ctk.CTkFrame(self)
         log_frame.pack(fill="x", padx=10, pady=(0, 10))
         
+        self.log_viewer = LogViewer(log_frame, height=200)
+        log_header = ctk.CTkFrame(log_frame)
+        log_header.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(
-            log_frame,
+            log_header,
             text="Encoding Log",
             font=ctk.CTkFont(size=14, weight="bold")
-        ).pack(anchor="w", padx=10, pady=5)
-        
-        self.log_viewer = LogViewer(log_frame, height=200)
+        ).pack(side="left", padx=(0, 10), pady=0)
+        ctk.CTkButton(log_header, text="Copy", width=70, command=self.log_viewer.copy_to_clipboard).pack(side="left")
         self.log_viewer.pack(fill="x", padx=10, pady=(0, 10))
         
         # Initialize encoder
@@ -546,8 +548,11 @@ class FFmpegTab(ctk.CTkFrame):
                 return
             
             audio_track = tracks.get("audio")
+            if not audio_track and config.get_allow_japanese_audio_with_english_subs() and tracks.get("first_audio"):
+                audio_track = tracks["first_audio"]
+                self._on_log("INFO", f"No English audio; using first audio track ({audio_track}) with English subs")
             subtitle_track = tracks.get("subtitle")
-            
+
             # Fix: If subtitle track wasn't detected but should have been, find Signs & Songs manually (by id order)
             if not subtitle_track and tracks.get("all_tracks"):
                 for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
@@ -558,7 +563,7 @@ class FFmpegTab(ctk.CTkFrame):
                             subtitle_track = track["id"]
                             self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected manually")
                             break
-            
+
             # Debug: Log all tracks found
             if tracks.get("all_tracks"):
                 self._on_log("DEBUG", f"Found {len(tracks['all_tracks'])} tracks in file")
@@ -569,13 +574,12 @@ class FFmpegTab(ctk.CTkFrame):
                         is_eng = self.track_analyzer._is_english_subtitle_track(track["language"], track["name"])
                         is_signs = self.track_analyzer._is_signs_songs_track(track["name"])
                         self._on_log("DEBUG", f"Subtitle track {track['id']} (HandBrake track {track['id'] + 1}): lang='{track['language']}', name='{track['name']}', English={is_eng}, Signs&Songs={is_signs}")
-                # Also log what was actually returned
-                self._on_log("DEBUG", f"Analysis returned: audio={tracks.get('audio')}, subtitle={tracks.get('subtitle')}")
-            
+                self._on_log("DEBUG", f"Analysis returned: audio={tracks.get('audio')}, first_audio={tracks.get('first_audio')}, subtitle={tracks.get('subtitle')}")
+
             if not audio_track:
-                messagebox.showwarning("No Audio Track", "No English audio track found in the file.")
+                messagebox.showwarning("No Audio Track", "No English audio track found. Enable 'Encode Japanese audio with English subs' in Settings to use the first audio track.")
                 return
-            
+
             # Update file data
             first_file_data["audio_track"] = audio_track
             first_file_data["subtitle_track"] = subtitle_track
@@ -953,14 +957,18 @@ class FFmpegTab(ctk.CTkFrame):
                 self._on_log("ERROR", f"Track analysis failed: {tracks['error']}")
                 file_data["status"] = "Error"
                 continue
-            
-            if not tracks.get("audio"):
+
+            effective_audio = tracks.get("audio")
+            if not effective_audio and config.get_allow_japanese_audio_with_english_subs() and tracks.get("first_audio"):
+                effective_audio = tracks["first_audio"]
+                self._on_log("INFO", f"No English audio; using first audio track ({effective_audio}) with English subs for: {source_file.name}")
+            if not effective_audio:
                 self._on_log("WARNING", f"No English audio track found for: {source_file.name}")
                 file_data["status"] = "Skipped"
                 continue
-            
+
             # Update file data with track info
-            file_data["audio_track"] = tracks["audio"]
+            file_data["audio_track"] = effective_audio
             subtitle_track = tracks.get("subtitle")
             
             # Fix: If subtitle track wasn't detected, find Signs & Songs manually (by id order)
@@ -1034,7 +1042,7 @@ class FFmpegTab(ctk.CTkFrame):
                     command_template,
                     source_file,
                     output_file,
-                    tracks["audio"],
+                    effective_audio,
                     tracks.get("subtitle"),
                     subtitle_file
                 )

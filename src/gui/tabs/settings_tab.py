@@ -183,7 +183,27 @@ class SettingsTab(ctk.CTkFrame):
             "Exclude Patterns: Patterns to exclude (e.g., 'Japanese' to skip Japanese tracks)\n\n"
             "Use the Debug tab to see what tracks are found and why they're selected."
         )
-        
+
+        # Allow Japanese audio with English subs (when no English audio track)
+        allow_ja_frame = ctk.CTkFrame(track_frame)
+        allow_ja_frame.pack(fill="x", padx=10, pady=5)
+        self._create_help_icon(
+            allow_ja_frame,
+            "When enabled, files with no English audio track will still be encoded using the first "
+            "audio track (e.g. Japanese) and English subtitles (Signs & Songs or first English sub). "
+            "Useful for anime that is Japanese-only with English subs."
+        )
+        self.allow_japanese_subs_switch = ctk.CTkSwitch(
+            allow_ja_frame,
+            text="Encode Japanese audio with English subs (when no English audio found)",
+            command=self._on_allow_japanese_subs_changed
+        )
+        self.allow_japanese_subs_switch.pack(side="left", padx=10, pady=10)
+        if config.get_allow_japanese_audio_with_english_subs():
+            self.allow_japanese_subs_switch.select()
+        else:
+            self.allow_japanese_subs_switch.deselect()
+
         # Audio language tags
         self._create_list_setting(
             track_frame,
@@ -458,7 +478,11 @@ class SettingsTab(ctk.CTkFrame):
         """Handle subtitle exclude patterns change"""
         patterns = [p.strip() for p in value.split(",") if p.strip()]
         config.set_subtitle_exclude_patterns(patterns)
-    
+
+    def _on_allow_japanese_subs_changed(self):
+        """Handle allow Japanese audio with English subs toggle"""
+        config.set_allow_japanese_audio_with_english_subs(self.allow_japanese_subs_switch.get())
+
     def _on_ffmpeg_path_changed(self):
         """Handle FFmpeg path change (when entry loses focus)"""
         path = self.ffmpeg_entry.get().strip()
