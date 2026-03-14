@@ -142,6 +142,20 @@ class FilesTab(ctk.CTkFrame):
             width=100
         ).pack(side="left", padx=5)
         
+        ctk.CTkButton(
+            bottom_frame,
+            text="Select All",
+            command=self._select_all,
+            width=100
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            bottom_frame,
+            text="Deselect All",
+            command=self._deselect_all,
+            width=100
+        ).pack(side="left", padx=5)
+        
         # Load saved scan folder
         last_scan = config.get_last_scan_folder()
         if last_scan and Path(last_scan).exists():
@@ -329,6 +343,14 @@ class FilesTab(ctk.CTkFrame):
         if self.on_files_changed:
             self.on_files_changed()
         self._update_preview()
+    
+    def _select_all(self):
+        """Select all files in the list"""
+        self.file_list.select_all()
+    
+    def _deselect_all(self):
+        """Deselect all files in the list"""
+        self.file_list.deselect_all()
     
     def get_files(self):
         """Get list of files"""
