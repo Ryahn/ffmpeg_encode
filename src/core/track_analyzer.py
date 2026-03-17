@@ -1,5 +1,6 @@
 """Analyze video tracks using mkvinfo or ffprobe"""
 
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -8,6 +9,8 @@ import shutil
 
 from core.subprocess_utils import get_subprocess_kwargs
 from utils.config import config
+
+logger = logging.getLogger(__name__)
 
 _REGEX_CACHE_MAX_KEYS = 64
 
@@ -192,10 +195,11 @@ class TrackAnalyzer:
             "error": None,
             "all_tracks": tracks
         }
-        # Debug: log what's being returned
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Track analysis result: audio={audio_track}, subtitle={subtitle_track}")
+        logger.debug(
+            "Track analysis result: audio=%s, subtitle=%s",
+            audio_track,
+            subtitle_track,
+        )
         return result
     
     def _is_english_track(self, language: Optional[str], name: Optional[str]) -> bool:

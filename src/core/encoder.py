@@ -1,5 +1,6 @@
 """Encoder wrapper for HandBrake and FFmpeg"""
 
+import logging
 import re
 import subprocess
 import sys
@@ -12,6 +13,8 @@ from queue import Queue, Empty
 import tempfile
 
 from core.subprocess_utils import get_subprocess_kwargs
+
+logger = logging.getLogger(__name__)
 
 OUTPUT_FILE_WAIT_MAX_RETRIES = 10
 OUTPUT_FILE_INITIAL_DELAY_SEC = 0.1
@@ -570,19 +573,14 @@ def extract_subtitle_stream(
                 output_file.unlink()
                 return None
         else:
-            # Log extraction failure
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Subtitle extraction failed: returncode={result.returncode}")
+            logger.error("Subtitle extraction failed: returncode=%s", result.returncode)
             if result.stderr:
-                logger.error(f"FFmpeg error: {result.stderr}")
+                logger.error("FFmpeg error: %s", result.stderr)
             if output_file.exists():
                 output_file.unlink()
             return None
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError) as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Subtitle extraction exception: {e}")
+        logger.error("Subtitle extraction exception: %s", e)
         if output_file.exists():
             output_file.unlink()
         return None
