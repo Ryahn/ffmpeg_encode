@@ -1,8 +1,9 @@
 """Main entry point for the application"""
 
 import sys
-import os
 from pathlib import Path
+
+from utils.config import config
 
 # Handle PyInstaller bundled executable
 if getattr(sys, 'frozen', False):
@@ -28,6 +29,8 @@ def main():
     except Exception as e:
         logger.error(f"Application error: {str(e)}")
         raise
+    finally:
+        config.flush()
 
 
 if __name__ == "__main__":

@@ -4,8 +4,11 @@ import json
 import os
 import sys
 import shutil
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
+
+CONFIG_SAVE_DEBOUNCE_SEC = 0.4
 
 
 class Config:
@@ -27,6 +30,9 @@ class Config:
         
         self.config_file = self.config_dir / "config.json"
         self.config: Dict[str, Any] = {}
+        self._save_lock = threading.Lock()
+        self._dirty = False
+        self._save_timer: Optional[threading.Timer] = None
         self._load()
     
     def _load(self):
@@ -35,7 +41,7 @@ class Config:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     self.config = json.load(f)
-            except Exception:
+            except (json.JSONDecodeError, OSError, UnicodeError):
                 self.config = {}
         else:
             self.config = {}
@@ -65,23 +71,54 @@ class Config:
             "subtitle_exclude_patterns": ["Japanese", "JPN", "日本語"]
         }
     
-    def _save(self):
-        """Save configuration to file"""
+    def _write_config_file_locked(self) -> None:
+        """Persist config; caller must hold _save_lock."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
         try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2)
-        except Exception as e:
+        except OSError as e:
             print(f"Error saving config: {e}")
+
+    def _schedule_save(self) -> None:
+        with self._save_lock:
+            self._dirty = True
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+                self._save_timer = None
+
+            def run_save() -> None:
+                with self._save_lock:
+                    self._save_timer = None
+                    if not self._dirty:
+                        return
+                    self._dirty = False
+                    self._write_config_file_locked()
+
+            timer = threading.Timer(CONFIG_SAVE_DEBOUNCE_SEC, run_save)
+            self._save_timer = timer
+            timer.daemon = True
+            timer.start()
+
+    def flush(self) -> None:
+        """Write pending changes immediately (e.g. before app exit)."""
+        with self._save_lock:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+                self._save_timer = None
+            if not self._dirty:
+                return
+            self._dirty = False
+            self._write_config_file_locked()
     
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value"""
         return self.config.get(key, default)
     
     def set(self, key: str, value: Any):
-        """Set a configuration value and save"""
+        """Set a configuration value; persists after a short debounce or on flush()."""
         self.config[key] = value
-        self._save()
+        self._schedule_save()
     
     def get_ffmpeg_path(self) -> str:
         """Get FFmpeg executable path"""
@@ -336,7 +373,7 @@ class Config:
             if path.exists():
                 try:
                     path.unlink()
-                except Exception:
+                except OSError:
                     pass
             # Remove from config
             del presets[name]

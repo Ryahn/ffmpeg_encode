@@ -4,23 +4,10 @@ import os
 import platform
 import subprocess
 import shutil
-import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
-
-def _get_subprocess_kwargs() -> dict:
-    """Get subprocess kwargs with hidden console window on Windows"""
-    kwargs = {}
-    if sys.platform == 'win32':
-        # Use CREATE_NO_WINDOW constant (0x08000000) to prevent console window
-        # This works with both Popen and run, and still allows stdout/stderr capture
-        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        else:
-            # Fallback to constant value if attribute not available
-            kwargs['creationflags'] = 0x08000000
-    return kwargs
+from core.subprocess_utils import get_subprocess_kwargs
 
 
 class PackageManager:
@@ -50,82 +37,62 @@ class PackageManager:
         return None
     
     def check_ffmpeg(self) -> Tuple[bool, Optional[str]]:
-        """Check if FFmpeg is installed"""
+        """Check if FFmpeg is installed (PATH first, then common install locations)."""
+        path_names = ("ffmpeg", "ffmpeg.exe") if self.is_windows else ("ffmpeg",)
+        for name in path_names:
+            found = shutil.which(name)
+            if found:
+                return True, found
+
         if self.is_windows:
-            # Check common Windows paths
-            paths = [
+            fallback_paths = [
                 "C:\\ffmpeg\\bin",
                 "C:\\Program Files\\ffmpeg\\bin",
                 os.path.expanduser("~\\AppData\\Local\\UniGetUI\\Chocolatey\\bin"),
             ]
-            exe_name = "ffmpeg.exe"
+            exe_on_path = "ffmpeg.exe"
         else:
-            paths = [
-                "/usr/local/bin",
-                "/opt/homebrew/bin",
-            ]
-            exe_name = "ffmpeg"
-        
-        exe = self.find_executable(exe_name, paths)
+            fallback_paths = ["/usr/local/bin", "/opt/homebrew/bin"]
+            exe_on_path = "ffmpeg"
+
+        exe = self.find_executable(exe_on_path, fallback_paths)
         if exe:
             return True, exe
-        
-        # Check PATH
-        exe = shutil.which(exe_name)
-        if exe:
-            return True, exe
-        
         return False, None
     
     def check_handbrake(self) -> Tuple[bool, Optional[str]]:
-        """Check if HandBrake CLI is installed"""
+        """Check if HandBrake CLI is installed (PATH first)."""
+        path_names = ("HandBrakeCLI", "HandBrakeCLI.exe") if self.is_windows else ("HandBrakeCLI",)
+        for name in path_names:
+            found = shutil.which(name)
+            if found:
+                return True, found
+
         if self.is_windows:
-            paths = [
-                "C:\\Program Files\\HandBrake",
-            ]
-            exe_name = "HandBrakeCLI.exe"
+            fallback = ["C:\\Program Files\\HandBrake"]
+            exe = "HandBrakeCLI.exe"
         else:
-            paths = [
-                "/usr/local/bin",
-                "/opt/homebrew/bin",
-            ]
-            exe_name = "HandBrakeCLI"
-        
-        exe = self.find_executable(exe_name, paths)
-        if exe:
-            return True, exe
-        
-        # Check PATH
-        exe = shutil.which(exe_name)
-        if exe:
-            return True, exe
-        
-        return False, None
+            fallback = ["/usr/local/bin", "/opt/homebrew/bin"]
+            exe = "HandBrakeCLI"
+        found = self.find_executable(exe, fallback)
+        return (True, found) if found else (False, None)
     
     def check_mkvinfo(self) -> Tuple[bool, Optional[str]]:
-        """Check if mkvinfo is installed"""
+        """Check if mkvinfo is installed (PATH first)."""
+        path_names = ("mkvinfo", "mkvinfo.exe") if self.is_windows else ("mkvinfo",)
+        for name in path_names:
+            found = shutil.which(name)
+            if found:
+                return True, found
+
         if self.is_windows:
-            paths = [
-                "C:\\Program Files\\MKVToolNix",
-            ]
-            exe_name = "mkvinfo.exe"
+            fallback = ["C:\\Program Files\\MKVToolNix"]
+            exe = "mkvinfo.exe"
         else:
-            paths = [
-                "/usr/local/bin",
-                "/opt/homebrew/bin",
-            ]
-            exe_name = "mkvinfo"
-        
-        exe = self.find_executable(exe_name, paths)
-        if exe:
-            return True, exe
-        
-        # Check PATH
-        exe = shutil.which(exe_name)
-        if exe:
-            return True, exe
-        
-        return False, None
+            fallback = ["/usr/local/bin", "/opt/homebrew/bin"]
+            exe = "mkvinfo"
+        found = self.find_executable(exe, fallback)
+        return (True, found) if found else (False, None)
     
     def install_ffmpeg(self) -> Tuple[bool, str]:
         """Install FFmpeg via package manager"""
@@ -170,7 +137,7 @@ class PackageManager:
                 'text': True,
                 'timeout': 600  # 10 minute timeout
             }
-            run_kwargs.update(_get_subprocess_kwargs())
+            run_kwargs.update(get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             
@@ -180,7 +147,7 @@ class PackageManager:
                 return False, f"Failed to install {package}: {result.stderr}"
         except subprocess.TimeoutExpired:
             return False, f"Installation of {package} timed out"
-        except Exception as e:
+        except OSError as e:
             return False, f"Error installing {package}: {str(e)}"
     
     def _install_via_homebrew(self, package: str) -> Tuple[bool, str]:
@@ -199,7 +166,7 @@ class PackageManager:
                 'text': True,
                 'timeout': 600  # 10 minute timeout
             }
-            run_kwargs.update(_get_subprocess_kwargs())
+            run_kwargs.update(get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             
@@ -209,6 +176,6 @@ class PackageManager:
                 return False, f"Failed to install {package}: {result.stderr}"
         except subprocess.TimeoutExpired:
             return False, f"Installation of {package} timed out"
-        except Exception as e:
+        except OSError as e:
             return False, f"Error installing {package}: {str(e)}"
 

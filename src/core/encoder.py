@@ -7,9 +7,14 @@ import threading
 import time
 import os
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any
-from queue import Queue
+from typing import Optional, Callable, Dict, Any, List
+from queue import Queue, Empty
 import tempfile
+
+from core.subprocess_utils import get_subprocess_kwargs
+
+OUTPUT_FILE_WAIT_MAX_RETRIES = 10
+OUTPUT_FILE_INITIAL_DELAY_SEC = 0.1
 
 # Try to import psutil for better process management (optional)
 try:
@@ -17,20 +22,6 @@ try:
     HAS_PSUTIL = True
 except ImportError:
     HAS_PSUTIL = False
-
-
-def _get_subprocess_kwargs() -> dict:
-    """Get subprocess kwargs with hidden console window on Windows"""
-    kwargs = {}
-    if sys.platform == 'win32':
-        # Use CREATE_NO_WINDOW constant (0x08000000) to prevent console window
-        # This works with both Popen and run, and still allows stdout/stderr capture
-        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        else:
-            # Fallback to constant value if attribute not available
-            kwargs['creationflags'] = 0x08000000
-    return kwargs
 
 
 class EncodingProgress:
@@ -158,7 +149,7 @@ class Encoder:
                     'universal_newlines': True,
                     'shell': False
                 }
-                popen_kwargs.update(_get_subprocess_kwargs())
+                popen_kwargs.update(get_subprocess_kwargs())
                 
                 process = subprocess.Popen(**popen_kwargs)
                 self._log("INFO", f"Process started (PID: {process.pid})")
@@ -170,16 +161,14 @@ class Encoder:
                 self._log("ERROR", f"Encoder executable not found: {args[0] if args else 'unknown'}")
                 self._log("ERROR", f"Error details: {str(e)}")
                 return False
-            except Exception as e:
+            except OSError as e:
                 self._log("ERROR", f"Failed to start subprocess: {str(e)}")
                 import traceback
                 self._log("ERROR", f"Traceback: {traceback.format_exc()}")
                 return False
             
-            # Start threads to read output
-            stdout_queue = Queue()
-            stderr_queue = Queue()
-            
+            stdout_queue: Queue = Queue()
+            stderr_queue: Queue = Queue()
             stdout_thread = threading.Thread(
                 target=self._read_output,
                 args=(process.stdout, stdout_queue),
@@ -190,58 +179,42 @@ class Encoder:
                 args=(process.stderr, stderr_queue),
                 daemon=True
             )
-            
-            # Store thread references for cleanup
             self._stdout_thread = stdout_thread
             self._stderr_thread = stderr_thread
-            
-            stdout_thread.start()
-            stderr_thread.start()
-            
-            # Process output in real-time
+            try:
+                stdout_thread.start()
+                stderr_thread.start()
+            except RuntimeError as e:
+                self._log("ERROR", f"Failed to start output reader threads: {e}")
+                self._terminate_orphan_encoder_process(process)
+                with self._process_lock:
+                    self._current_process = None
+                return False
+
             while process.poll() is None:
                 if self._stop_event.is_set():
                     self._log("INFO", "Stop event set, terminating process...")
-                    # Close pipes immediately to unblock reading threads
                     self._close_pipes(process)
-                    
-                    # Try graceful termination first
                     try:
                         process.terminate()
-                    except Exception:
+                    except OSError:
                         pass
-                    
-                    # Wait briefly for graceful shutdown, but don't block too long
                     try:
                         process.wait(timeout=1)
                     except subprocess.TimeoutExpired:
-                        # Force kill if still running
                         try:
                             if sys.platform == 'win32':
                                 self._kill_process_tree_windows(process.pid)
                             else:
                                 process.kill()
-                        except Exception:
+                        except OSError:
                             pass
-                    
-                    # Clear process reference
                     with self._process_lock:
                         self._current_process = None
-                    
                     return False
-                
-                # Process stdout
-                while not stdout_queue.empty():
-                    line = stdout_queue.get()
-                    self._log("INFO", f"[{encoder_name}] {line}")
-                
-                # Process stderr (contains progress info)
-                while not stderr_queue.empty():
-                    line = stderr_queue.get()
-                    self._parse_progress(line, encoder_name)
-                    self._log("DEBUG", f"[{encoder_name}] {line}")
-                
-                # Use shorter sleep for more responsive stop detection
+
+                self._drain_stdout_queue(stdout_queue, encoder_name)
+                self._drain_stderr_queue(stderr_queue, encoder_name)
                 time.sleep(0.05)
             
             # Get remaining output
@@ -260,17 +233,9 @@ class Encoder:
             if stderr_thread.is_alive():
                 stderr_thread.join(timeout=1)
             
-            while not stdout_queue.empty():
-                line = stdout_queue.get()
-                self._log("INFO", f"[{encoder_name}] {line}")
-            
-            # Collect all stderr output (including errors)
-            stderr_lines = []
-            while not stderr_queue.empty():
-                line = stderr_queue.get()
-                stderr_lines.append(line)
-                self._parse_progress(line, encoder_name)
-                self._log("DEBUG", f"[{encoder_name}] {line}")
+            stderr_lines: List[str] = []
+            self._drain_stdout_queue(stdout_queue, encoder_name)
+            self._drain_stderr_queue(stderr_queue, encoder_name, stderr_lines)
             
             # If process failed, log all stderr as error
             if process.returncode != 0:
@@ -296,29 +261,68 @@ class Encoder:
             self._log("ERROR", f"Error encoding: {str(e)}")
             import traceback
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
-            
-            # Clear process reference on error
             with self._process_lock:
-                if self._current_process:
+                proc = self._current_process
+                if proc:
                     try:
-                        self._close_pipes(self._current_process)
+                        self._close_pipes(proc)
                         if sys.platform == 'win32':
-                            self._kill_process_tree_windows(self._current_process.pid)
+                            self._kill_process_tree_windows(proc.pid)
                         else:
-                            self._current_process.kill()
-                    except Exception:
+                            proc.kill()
+                    except OSError:
                         pass
                 self._current_process = None
-            
             return False
     
+    def _terminate_orphan_encoder_process(self, process: subprocess.Popen) -> None:
+        """Stop a started encoder if reader threads failed to start."""
+        if process.poll() is not None:
+            return
+        self._close_pipes(process)
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            try:
+                if sys.platform == 'win32':
+                    self._kill_process_tree_windows(process.pid)
+                else:
+                    process.kill()
+            except OSError:
+                pass
+
+    def _drain_stdout_queue(self, stdout_queue: Queue, encoder_name: str) -> None:
+        while True:
+            try:
+                line = stdout_queue.get_nowait()
+                self._log("INFO", f"[{encoder_name}] {line}")
+            except Empty:
+                break
+
+    def _drain_stderr_queue(
+        self, stderr_queue: Queue, encoder_name: str, stderr_lines: Optional[List[str]] = None
+    ) -> None:
+        while True:
+            try:
+                line = stderr_queue.get_nowait()
+                if stderr_lines is not None:
+                    stderr_lines.append(line)
+                self._parse_progress(line, encoder_name)
+                self._log("DEBUG", f"[{encoder_name}] {line}")
+            except Empty:
+                break
+
     def _read_output(self, pipe, queue: Queue):
         """Read output from pipe and put in queue"""
         try:
             for line in iter(pipe.readline, ''):
                 if line:
                     queue.put(line.strip())
-        except Exception:
+        except OSError:
             pass
     
     def _time_to_seconds(self, time_str: str) -> float:
@@ -401,19 +405,15 @@ class Encoder:
         if self.progress_callback:
             self.progress_callback(progress)
     
-    def _wait_for_file(self, file_path: Path, max_retries: int = 10) -> bool:
+    def _wait_for_file(self, file_path: Path, max_retries: int = OUTPUT_FILE_WAIT_MAX_RETRIES) -> bool:
         """Wait for output file to be created"""
         retry_count = 0
-        initial_delay = 0.1  # 100ms
-        
         while retry_count < max_retries:
             if file_path.exists():
                 return True
-            
             retry_count += 1
-            delay = initial_delay * (2 ** (retry_count - 1))  # Exponential backoff
+            delay = OUTPUT_FILE_INITIAL_DELAY_SEC * (2 ** (retry_count - 1))
             time.sleep(delay)
-        
         return False
     
     def _log(self, level: str, message: str):
@@ -451,15 +451,16 @@ class Encoder:
             
             # Fallback: Use taskkill command on Windows
             try:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(pid)],
-                    capture_output=True,
-                    timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                )
-            except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+                run_kw: Dict[str, Any] = {
+                    "args": ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    "capture_output": True,
+                    "timeout": 5,
+                }
+                run_kw.update(get_subprocess_kwargs())
+                subprocess.run(**run_kw)
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 pass
-        except Exception:
+        except OSError:
             pass
     
     def _force_kill_process(self, process: subprocess.Popen):
@@ -478,9 +479,9 @@ class Encoder:
                         # On Unix, try kill first, then SIGKILL
                         try:
                             process.kill()
-                        except Exception:
+                        except OSError:
                             pass
-        except Exception:
+        except OSError:
             pass
     
     def _close_pipes(self, process: subprocess.Popen):
@@ -488,12 +489,12 @@ class Encoder:
         try:
             if process.stdout:
                 process.stdout.close()
-        except Exception:
+        except OSError:
             pass
         try:
             if process.stderr:
                 process.stderr.close()
-        except Exception:
+        except OSError:
             pass
     
     def stop(self):
@@ -509,17 +510,14 @@ class Encoder:
                     # Terminate immediately, don't wait
                     try:
                         self._current_process.terminate()
-                    except Exception:
+                    except OSError:
                         pass
-                    
-                    # Force kill after short delay if still running
-                    # Use threading to avoid blocking GUI
                     threading.Thread(
                         target=self._force_kill_process,
                         args=(self._current_process,),
                         daemon=True
                     ).start()
-                except Exception:
+                except OSError:
                     pass
     
     def reset_stop_event(self):
@@ -559,7 +557,7 @@ def extract_subtitle_stream(
             'text': True,
             'timeout': 30
         }
-        run_kwargs.update(_get_subprocess_kwargs())
+        run_kwargs.update(get_subprocess_kwargs())
         
         result = subprocess.run(**run_kwargs)
         
@@ -581,7 +579,7 @@ def extract_subtitle_stream(
             if output_file.exists():
                 output_file.unlink()
             return None
-    except Exception as e:
+    except (subprocess.TimeoutExpired, OSError, FileNotFoundError) as e:
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Subtitle extraction exception: {e}")

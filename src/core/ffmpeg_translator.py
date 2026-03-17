@@ -20,7 +20,14 @@ class FFmpegTranslator:
         subtitle_file: Optional[Path] = None
     ) -> List[str]:
         """Build FFmpeg command from preset"""
-        cmd = ["ffmpeg", "-i", str(input_file)]
+        if audio_track < 1:
+            raise ValueError(f"audio_track must be >= 1, got {audio_track}")
+        if subtitle_track is not None and subtitle_track < 0:
+            raise ValueError(f"subtitle_track must be >= 0 when set, got {subtitle_track}")
+        if subtitle_file is not None and not subtitle_file.expanduser().is_file():
+            raise ValueError(f"Subtitle file not found: {subtitle_file}")
+
+        cmd = ["ffmpeg", "-i", str(input_file.expanduser())]
         
         # Map video stream
         cmd.extend(["-map", "0:v:0"])

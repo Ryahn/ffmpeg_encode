@@ -2,25 +2,14 @@
 
 import re
 import subprocess
-import sys
 from pathlib import Path
-from typing import Optional, Dict, Tuple, List
+from typing import Optional, Dict, List, Any, Pattern
 import shutil
+
+from core.subprocess_utils import get_subprocess_kwargs
 from utils.config import config
 
-
-def _get_subprocess_kwargs() -> dict:
-    """Get subprocess kwargs with hidden console window on Windows"""
-    kwargs = {}
-    if sys.platform == 'win32':
-        # Use CREATE_NO_WINDOW constant (0x08000000) to prevent console window
-        # This works with both Popen and run, and still allows stdout/stderr capture
-        if hasattr(subprocess, 'CREATE_NO_WINDOW'):
-            kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-        else:
-            # Fallback to constant value if attribute not available
-            kwargs['creationflags'] = 0x08000000
-    return kwargs
+_REGEX_CACHE_MAX_KEYS = 64
 
 
 class TrackAnalyzer:
@@ -29,6 +18,17 @@ class TrackAnalyzer:
     def __init__(self, mkvinfo_path: Optional[str] = None, ffprobe_path: Optional[str] = None):
         self.mkvinfo_path = mkvinfo_path or self._find_mkvinfo()
         self.ffprobe_path = ffprobe_path or self._find_ffprobe()
+        self._regex_cache: Dict[tuple, List[Pattern[str]]] = {}
+
+    def _compiled_regexes(self, pattern_strings: List[str]) -> List[Pattern[str]]:
+        key = tuple(pattern_strings)
+        cached = self._regex_cache.get(key)
+        if cached is None:
+            if len(self._regex_cache) >= _REGEX_CACHE_MAX_KEYS:
+                self._regex_cache.clear()
+            cached = [re.compile(p, re.IGNORECASE) for p in pattern_strings]
+            self._regex_cache[key] = cached
+        return cached
     
     def get_mkvinfo_output(self, file_path: Path) -> Optional[str]:
         """Get raw mkvinfo output for debugging"""
@@ -42,13 +42,13 @@ class TrackAnalyzer:
                 'text': True,
                 'timeout': 30
             }
-            run_kwargs.update(_get_subprocess_kwargs())
+            run_kwargs.update(get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             if result.returncode == 0:
                 return result.stdout
             return result.stderr
-        except Exception:
+        except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
             return None
     
     def _find_mkvinfo(self) -> Optional[str]:
@@ -59,7 +59,7 @@ class TrackAnalyzer:
         """Find ffprobe executable"""
         return shutil.which("ffprobe") or shutil.which("ffprobe.exe")
     
-    def analyze_tracks(self, file_path: Path) -> Dict[str, Optional[int]]:
+    def analyze_tracks(self, file_path: Path) -> Dict[str, Any]:
         """Analyze tracks in a video file"""
         if file_path.suffix.lower() == ".mkv" and self.mkvinfo_path:
             return self._analyze_mkv_tracks(file_path)
@@ -78,7 +78,7 @@ class TrackAnalyzer:
                 'text': True,
                 'timeout': 30
             }
-            run_kwargs.update(_get_subprocess_kwargs())
+            run_kwargs.update(get_subprocess_kwargs())
             
             result = subprocess.run(**run_kwargs)
             
@@ -88,10 +88,10 @@ class TrackAnalyzer:
             return self._parse_mkvinfo_output(result.stdout)
         except subprocess.TimeoutExpired:
             return {"audio": None, "subtitle": None, "error": "mkvinfo timed out"}
-        except Exception as e:
+        except (OSError, FileNotFoundError) as e:
             return {"audio": None, "subtitle": None, "error": str(e)}
     
-    def _parse_mkvinfo_output(self, output: str) -> Dict[str, Optional[int]]:
+    def _parse_mkvinfo_output(self, output: str) -> Dict[str, Any]:
         """Parse mkvinfo output to find tracks"""
         audio_track = None
         subtitle_track = None
@@ -159,14 +159,18 @@ class TrackAnalyzer:
         sorted_tracks = sorted(tracks, key=lambda t: t["id"])
         first_audio_track = None
         for track in sorted_tracks:
-            if track["type"] == "audio":
-                if first_audio_track is None:
-                    first_audio_track = track["id"] + 1
-                if audio_track is None:
-                    is_english = self._is_english_track(track["language"], track["name"])
-                    if is_english:
-                        audio_track = track["id"] + 1
-                        break
+            if track.get("type") != "audio":
+                continue
+            tid = track.get("id")
+            if tid is None:
+                continue
+            if first_audio_track is None:
+                first_audio_track = tid + 1
+            if audio_track is None:
+                is_english = self._is_english_track(track.get("language"), track.get("name"))
+                if is_english:
+                    audio_track = tid + 1
+                    break
 
         # Subtitle: explicitly pick the first (by id) English subtitle that matches Signs & Songs.
         # Return 0-based track id (HandBrake CLI expects 1-based; conversion at encode time).
@@ -176,7 +180,9 @@ class TrackAnalyzer:
             is_english_sub = self._is_english_subtitle_track(track.get("language"), track.get("name"))
             is_signs_songs = self._is_signs_songs_track(track.get("name"))
             if is_english_sub and is_signs_songs:
-                subtitle_track = track["id"]
+                stid = track.get("id")
+                if stid is not None:
+                    subtitle_track = stid
                 break
         
         result = {
@@ -208,17 +214,15 @@ class TrackAnalyzer:
         
         # Check name for English indicators (but not excluded patterns)
         if name:
-            # Check if name matches any pattern
             matches_pattern = False
-            for pattern in name_patterns:
-                if re.search(pattern, name, re.IGNORECASE):
+            for compiled in self._compiled_regexes(name_patterns):
+                if compiled.search(name):
                     matches_pattern = True
                     break
-            
+
             if matches_pattern:
-                # Check if it matches any exclude pattern
-                for exclude_pattern in exclude_patterns:
-                    if re.search(exclude_pattern, name, re.IGNORECASE):
+                for compiled in self._compiled_regexes(exclude_patterns):
+                    if compiled.search(name):
                         return False
                 return True
         
@@ -230,11 +234,10 @@ class TrackAnalyzer:
             return False
         
         patterns = config.get_subtitle_name_patterns()
-        
-        for pattern in patterns:
-            if re.search(pattern, name, re.IGNORECASE):
+        for compiled in self._compiled_regexes(patterns):
+            if compiled.search(name):
                 return True
-        
+
         return False
     
     def _matches_english_subtitle_language(self, language: Optional[str]) -> bool:
@@ -257,8 +260,8 @@ class TrackAnalyzer:
             for tag in lang_tags:
                 if lang_lower == tag.lower() or lang_lower.startswith(tag.lower() + "-") or lang_lower.startswith(tag.lower() + "_"):
                     if name:
-                        for exclude_pattern in exclude_patterns:
-                            if re.search(exclude_pattern, name, re.IGNORECASE):
+                        for compiled in self._compiled_regexes(exclude_patterns):
+                            if compiled.search(name):
                                 return False
                     return True
         return False

@@ -1,7 +1,7 @@
 """Logging utilities"""
 
 import logging
-import os
+import threading
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -40,8 +40,7 @@ class Logger:
             )
             file_handler.setFormatter(file_formatter)
             self.logger.addHandler(file_handler)
-        except Exception as e:
-            # If file logging fails, log to stderr
+        except OSError as e:
             import sys
             print(f"Warning: Failed to initialize file logging: {e}", file=sys.stderr)
             print(f"Log directory attempted: {log_dir}", file=sys.stderr)
@@ -57,31 +56,37 @@ class Logger:
         
         self.log_file = log_file
         self._log_buffer: deque = deque(maxlen=LOG_BUFFER_MAXLEN)
+        self._buffer_lock = threading.Lock()
     
     def info(self, message: str):
         """Log info message"""
         self.logger.info(message)
-        self._log_buffer.append(("INFO", message))
+        with self._buffer_lock:
+            self._log_buffer.append(("INFO", message))
     
     def warning(self, message: str):
         """Log warning message"""
         self.logger.warning(message)
-        self._log_buffer.append(("WARNING", message))
+        with self._buffer_lock:
+            self._log_buffer.append(("WARNING", message))
     
     def error(self, message: str):
         """Log error message"""
         self.logger.error(message)
-        self._log_buffer.append(("ERROR", message))
+        with self._buffer_lock:
+            self._log_buffer.append(("ERROR", message))
     
     def success(self, message: str):
         """Log success message"""
         self.logger.info(f"SUCCESS: {message}")
-        self._log_buffer.append(("SUCCESS", message))
+        with self._buffer_lock:
+            self._log_buffer.append(("SUCCESS", message))
     
     def debug(self, message: str):
         """Log debug message"""
         self.logger.debug(message)
-        self._log_buffer.append(("DEBUG", message))
+        with self._buffer_lock:
+            self._log_buffer.append(("DEBUG", message))
     
     def get_log_file(self) -> Optional[Path]:
         """Get the log file path"""
@@ -89,12 +94,14 @@ class Logger:
     
     def get_recent_logs(self, count: int = 100) -> list:
         """Get recent log entries"""
-        buf = list(self._log_buffer)
+        with self._buffer_lock:
+            buf = list(self._log_buffer)
         return buf[-count:]
     
     def clear_buffer(self):
         """Clear the log buffer"""
-        self._log_buffer.clear()
+        with self._buffer_lock:
+            self._log_buffer.clear()
 
 
 # Global logger instance
