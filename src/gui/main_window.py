@@ -49,6 +49,7 @@ class MainWindow(ctk.CTk):
         self.files_tab = FilesTab(tab_frame)
         self.files_tab.pack(fill="both", expand=True)
         self.files_tab.on_files_changed = self._on_files_changed
+        self.files_tab.on_status = self._update_status
         
         # HandBrake tab
         self.tabview.add("HandBrake")
@@ -176,5 +177,10 @@ class MainWindow(ctk.CTk):
     
     def run(self):
         """Run the application"""
+        def on_close() -> None:
+            config.flush()
+            self.destroy()
+
+        self.protocol("WM_DELETE_WINDOW", on_close)
         self.mainloop()
 

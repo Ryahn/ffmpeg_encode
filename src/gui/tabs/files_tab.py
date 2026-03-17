@@ -1,11 +1,17 @@
 """Files tab for managing video files"""
 
+import threading
+
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, StringVar
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, List
+
 from ..widgets.file_list import FileListWidget
+from ..dialogs.set_tracks_dialog import show_set_tracks_dialog
 from core.file_scanner import FileScanner
+from core.track_analyzer import TrackAnalyzer
+from core.track_selection import compute_effective_tracks
 from utils.config import config
 
 
@@ -19,7 +25,14 @@ class FilesTab(ctk.CTkFrame):
         self.scan_folder: Optional[Path] = None
         self.output_folder: Optional[Path] = None
         self.on_files_changed: Optional[Callable] = None
-        
+        self.on_status: Optional[Callable[[str], None]] = None
+
+        mkvinfo_path = config.get_mkvinfo_path() or "mkvinfo"
+        self.track_analyzer = TrackAnalyzer(
+            mkvinfo_path=mkvinfo_path if mkvinfo_path != "mkvinfo" else None
+        )
+        self._load_tracks_busy = False
+
         # Top controls: two rows so output section has full width and buttons stay visible
         controls_frame = ctk.CTkFrame(self)
         controls_frame.pack(fill="x", padx=10, pady=10)
@@ -155,7 +168,35 @@ class FilesTab(ctk.CTkFrame):
             command=self._deselect_all,
             width=100
         ).pack(side="left", padx=5)
-        
+
+        batch_frame = ctk.CTkFrame(self)
+        batch_frame.pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkButton(
+            batch_frame,
+            text="Set tracks…",
+            command=self._open_set_tracks_dialog,
+            width=110,
+        ).pack(side="left", padx=5)
+        self.load_tracks_btn = ctk.CTkButton(
+            batch_frame,
+            text="Load tracks",
+            command=self._load_tracks,
+            width=110,
+        )
+        self.load_tracks_btn.pack(side="left", padx=5)
+        ctk.CTkButton(
+            batch_frame,
+            text="Mark for re-encode",
+            command=self._mark_for_reencode,
+            width=140,
+        ).pack(side="left", padx=5)
+        ctk.CTkButton(
+            batch_frame,
+            text="Clear re-encode",
+            command=self._clear_reencode_marks,
+            width=120,
+        ).pack(side="left", padx=5)
+
         # Load saved scan folder
         last_scan = config.get_last_scan_folder()
         if last_scan and Path(last_scan).exists():
@@ -205,24 +246,49 @@ class FilesTab(ctk.CTkFrame):
         strip_n = config.get_strip_leading_path_segments()
         files = self.file_list.get_files()
         if files:
-            source_file = Path(files[0]["path"])
-            if self.scan_folder:
-                try:
-                    relative_path = source_file.relative_to(self.scan_folder)
-                    relative_dir = relative_path.parent
-                    parts = relative_dir.parts
-                    remaining = parts[strip_n:]
-                    if remaining:
-                        output_dir = self.output_folder / Path(*remaining)
+            roots_seen = set()
+            previews = []
+            for fd in files[:3]:
+                source_file = Path(fd["path"])
+                root = fd.get("root")
+                if root is not None:
+                    roots_seen.add(root)
+                    try:
+                        relative_path = source_file.relative_to(root)
+                        relative_dir = relative_path.parent
+                        parts = relative_dir.parts
+                        remaining = parts[strip_n:]
+                        if remaining:
+                            output_dir = self.output_folder / Path(*remaining)
+                        else:
+                            output_dir = self.output_folder
+                        result_path = output_dir / f"{source_file.stem}{suffix}.mp4"
+                        previews.append(str(result_path))
+                    except ValueError:
+                        output_dir = self.output_folder / source_file.parent.name
+                        previews.append(str(output_dir / f"{source_file.stem}{suffix}.mp4"))
+                else:
+                    if self.scan_folder:
+                        try:
+                            relative_path = source_file.relative_to(self.scan_folder)
+                            relative_dir = relative_path.parent
+                            parts = relative_dir.parts
+                            remaining = parts[strip_n:]
+                            if remaining:
+                                output_dir = self.output_folder / Path(*remaining)
+                            else:
+                                output_dir = self.output_folder
+                            previews.append(str(output_dir / f"{source_file.stem}{suffix}.mp4"))
+                        except ValueError:
+                            previews.append(str(self.output_folder / f"{source_file.stem}{suffix}.mp4"))
                     else:
-                        output_dir = self.output_folder
-                    result_path = output_dir / f"{source_file.stem}{suffix}.mp4"
-                    return str(result_path)
-                except ValueError:
-                    result_path = self.output_folder / f"{source_file.stem}{suffix}.mp4"
-                    return str(result_path)
-            result_path = self.output_folder / f"{source_file.stem}{suffix}.mp4"
-            return str(result_path)
+                        output_dir = self.output_folder / source_file.parent.name
+                        previews.append(str(output_dir / f"{source_file.stem}{suffix}.mp4"))
+            if not previews:
+                return str(self.output_folder / f"file{suffix}.mp4") + " (example)"
+            if len(roots_seen) > 1 or len(previews) > 1:
+                return " | ".join(previews) if len(previews) <= 2 else previews[0] + " ..."
+            return previews[0]
         parts = ["Subfolder", "Another"]
         remaining = parts[strip_n:] if strip_n < len(parts) else []
         if remaining:
@@ -299,7 +365,7 @@ class FilesTab(ctk.CTkFrame):
         
         # Add files to list
         for file_path in files:
-            self.file_list.add_file(file_path, relative_to=self.scan_folder)
+            self.file_list.add_file(file_path, relative_to=self.scan_folder, root=self.scan_folder)
         
         if self.on_files_changed:
             self.on_files_changed()
@@ -320,7 +386,9 @@ class FilesTab(ctk.CTkFrame):
         )
         
         for file_path in files:
-            self.file_list.add_file(Path(file_path))
+            path = Path(file_path)
+            root = path.parent.parent if path.parent != path else path.parent
+            self.file_list.add_file(path, root=root)
         
         if self.on_files_changed:
             self.on_files_changed()
@@ -351,7 +419,222 @@ class FilesTab(ctk.CTkFrame):
     def _deselect_all(self):
         """Deselect all files in the list"""
         self.file_list.deselect_all()
-    
+
+    def _mark_for_reencode(self):
+        indices = self.file_list.get_action_target_indices()
+        if not indices:
+            messagebox.showwarning(
+                "No selection",
+                "Select one or more files (click rows or use the checkbox column).",
+            )
+            return
+        count = self.file_list.set_reencode_for_indices(indices, True)
+        messagebox.showinfo(
+            "Re-encode",
+            f"Marked {count} file(s). They will be encoded even if the output file already exists.",
+        )
+
+    def _clear_reencode_marks(self):
+        indices = self.file_list.get_action_target_indices()
+        if not indices:
+            indices = list(range(self.file_list.get_file_count()))
+        if not indices:
+            return
+        count = self.file_list.set_reencode_for_indices(indices, False)
+        messagebox.showinfo("Re-encode", f"Cleared re-encode mark on {count} file(s).")
+
+    def _load_tracks(self):
+        if self._load_tracks_busy:
+            return
+        files = self.file_list.get_files()
+        if not files:
+            messagebox.showwarning("No Files", "Add files to the list first.")
+            return
+        if not self.track_analyzer.mkvinfo_path and not self.track_analyzer.ffprobe_path:
+            messagebox.showerror(
+                "Track analysis unavailable",
+                "Install MKVToolNix (mkvinfo) for MKV files, or FFmpeg (ffprobe) for other formats.",
+            )
+            return
+
+        indices = self.file_list.get_action_target_indices()
+        scope = "selected"
+        if not indices:
+            indices = list(range(len(files)))
+            scope = "all"
+
+        self._load_tracks_busy = True
+        self.load_tracks_btn.configure(state="disabled")
+        if self.on_status:
+            self.on_status(f"Loading tracks ({scope})… 0/{len(indices)}")
+
+        def worker():
+            failed: List[str] = []
+            results: List[dict] = []
+            for pos, idx in enumerate(indices):
+                source_file = Path(files[idx]["path"])
+                tracks = self.track_analyzer.analyze_tracks(source_file)
+                done = pos + 1
+                total = len(indices)
+
+                def update_status(p=done, t=total):
+                    if self.on_status:
+                        self.on_status(f"Loading tracks ({scope})… {p}/{t}")
+
+                self.after(0, update_status)
+
+                if tracks.get("error"):
+                    failed.append(source_file.name)
+                    continue
+
+                effective_audio, subtitle_track = compute_effective_tracks(
+                    tracks, self.track_analyzer
+                )
+
+                if effective_audio is not None:
+                    results.append(
+                        {
+                            "idx": idx,
+                            "audio": effective_audio,
+                            "subtitle": subtitle_track,
+                            "no_audio_name": None,
+                        }
+                    )
+                else:
+                    results.append(
+                        {
+                            "idx": idx,
+                            "audio": None,
+                            "subtitle": None,
+                            "no_audio_name": source_file.name,
+                        }
+                    )
+
+            def apply_all():
+                no_audio_names: List[str] = []
+                for r in results:
+                    if r["no_audio_name"]:
+                        no_audio_names.append(r["no_audio_name"])
+                    self.file_list.update_file(
+                        r["idx"],
+                        audio_track=r["audio"],
+                        subtitle_track=r["subtitle"],
+                        tracks_from_user=False,
+                    )
+                self._load_tracks_busy = False
+                self.load_tracks_btn.configure(state="normal")
+                if self.on_status:
+                    self._update_status_after_load()
+                parts = []
+                if failed:
+                    parts.append(f"Analysis failed: {len(failed)} file(s)")
+                if no_audio_names:
+                    parts.append(
+                        f"No English audio (or disabled Japanese mode): {len(no_audio_names)} file(s)"
+                    )
+                if not parts:
+                    messagebox.showinfo(
+                        "Load tracks",
+                        f"Updated track info for {len(indices)} file(s).",
+                    )
+                else:
+                    messagebox.showinfo(
+                        "Load tracks",
+                        f"Processed {len(indices)} file(s).\n" + "\n".join(parts),
+                    )
+
+            self.after(0, apply_all)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_status_after_load(self):
+        if self.on_status:
+            count = self.file_list.get_file_count()
+            self.on_status(f"Ready - {count} file(s) in queue")
+
+    def _open_set_tracks_dialog(self):
+        indices = self.file_list.get_action_target_indices()
+        if not indices:
+            messagebox.showwarning(
+                "No selection",
+                "Select one or more files (click rows or use the checkbox column).",
+            )
+            return
+        files = self.file_list.get_files()
+        first_idx = indices[0]
+        source_file = Path(files[first_idx]["path"])
+        if not source_file.exists():
+            messagebox.showerror("File not found", str(source_file))
+            return
+
+        tracks = self.track_analyzer.analyze_tracks(source_file)
+        if tracks.get("error"):
+            messagebox.showerror(
+                "Analysis failed",
+                f"Could not read tracks: {tracks['error']}",
+            )
+            return
+        all_tracks = tracks.get("all_tracks") or []
+        if not all_tracks:
+            messagebox.showinfo(
+                "No track list",
+                "Track layout could not be listed for this file. "
+                "Use MKV files with mkvinfo, or load tracks after analysis support is added for this format.",
+            )
+            return
+
+        audio_tracks = sorted(
+            [t for t in all_tracks if t.get("type") == "audio"],
+            key=lambda t: t["id"],
+        )
+        sub_tracks = sorted(
+            [t for t in all_tracks if t.get("type") == "subtitles"],
+            key=lambda t: t["id"],
+        )
+
+        def audio_label(t):
+            n = t["id"] + 1
+            lang = t.get("language") or "?"
+            name = (t.get("name") or "").strip()
+            extra = f" — {name}" if name else ""
+            return f"Audio track {n} ({lang}){extra}", n
+
+        def sub_label(t):
+            lang = t.get("language") or "?"
+            name = (t.get("name") or "").strip()
+            extra = f" — {name}" if name else ""
+            return f"Subtitle stream {t['id']} (HB {t['id'] + 1}) ({lang}){extra}", t["id"]
+
+        audio_options = [("None (no audio track)", None)] + [audio_label(t) for t in audio_tracks]
+        subtitle_options = [("None (no burned subtitles)", None)] + [
+            sub_label(t) for t in sub_tracks
+        ]
+
+        picked = show_set_tracks_dialog(
+            self,
+            audio_options,
+            subtitle_options,
+            len(indices),
+        )
+        if picked is None:
+            return
+        audio_track, subtitle_track = picked
+        if audio_track is None:
+            if not messagebox.askyesno(
+                "No audio",
+                "Audio is set to None. Encoding may fail. Continue?",
+            ):
+                return
+        for idx in indices:
+            self.file_list.update_file(
+                idx,
+                audio_track=audio_track,
+                subtitle_track=subtitle_track,
+                tracks_from_user=True,
+            )
+        if self.on_files_changed:
+            self.on_files_changed()
+
     def get_files(self):
         """Get list of files"""
         return self.file_list.get_files()
@@ -365,28 +648,52 @@ class FilesTab(ctk.CTkFrame):
         return self.output_folder
     
     def get_output_path(self, source_file: Path) -> Path:
-        """Get output path for a source file, preserving folder structure"""
+        """Get output path for a source file, preserving folder structure per file root."""
         use_custom = (
             self.output_destination_var.get() == "custom_folder" and self.output_folder
         )
         if not use_custom:
             return source_file.parent
 
-        if not self.scan_folder:
-            return self.output_folder
+        root = None
+        for fd in self.file_list.get_files():
+            if fd.get("path") == source_file:
+                root = fd.get("root")
+                break
 
-        try:
-            relative_path = source_file.relative_to(self.scan_folder)
-            relative_dir = relative_path.parent
-            parts = relative_dir.parts
-            strip_n = config.get_strip_leading_path_segments()
-            remaining = parts[strip_n:]
-            if remaining:
-                output_dir = self.output_folder / Path(*remaining)
-            else:
-                output_dir = self.output_folder
-            output_dir.mkdir(parents=True, exist_ok=True)
-            return output_dir
-        except ValueError:
-            return self.output_folder
+        if root is not None:
+            try:
+                relative_path = source_file.relative_to(root)
+                relative_dir = relative_path.parent
+                parts = relative_dir.parts
+                strip_n = config.get_strip_leading_path_segments()
+                remaining = parts[strip_n:]
+                if remaining:
+                    output_dir = self.output_folder / Path(*remaining)
+                else:
+                    output_dir = self.output_folder
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return output_dir
+            except ValueError:
+                pass
+
+        if self.scan_folder:
+            try:
+                relative_path = source_file.relative_to(self.scan_folder)
+                relative_dir = relative_path.parent
+                parts = relative_dir.parts
+                strip_n = config.get_strip_leading_path_segments()
+                remaining = parts[strip_n:]
+                if remaining:
+                    output_dir = self.output_folder / Path(*remaining)
+                else:
+                    output_dir = self.output_folder
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return output_dir
+            except ValueError:
+                pass
+
+        output_dir = self.output_folder / source_file.parent.name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
 

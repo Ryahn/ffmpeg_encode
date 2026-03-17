@@ -11,6 +11,7 @@ from ..widgets.log_viewer import LogViewer
 from core.preset_parser import PresetParser
 from core.encoder import Encoder, EncodingProgress
 from core.track_analyzer import TrackAnalyzer
+from core.track_selection import compute_effective_tracks
 from core.ffmpeg_translator import FFmpegTranslator
 from utils.config import config
 from utils.logger import logger
@@ -295,49 +296,49 @@ class HandBrakeTab(ctk.CTkFrame):
                 break
             
             source_file = Path(file_data["path"])
-            
-            # Analyze tracks
-            self._on_log("INFO", f"Analyzing tracks for: {source_file.name}")
-            tracks = self.track_analyzer.analyze_tracks(source_file)
-            
-            if tracks.get("error"):
-                self._on_log("ERROR", f"Track analysis failed: {tracks['error']}")
-                file_data["status"] = "Error"
-                continue
 
-            from utils.config import config
-            effective_audio = tracks.get("audio")
-            if not effective_audio and config.get_allow_japanese_audio_with_english_subs() and tracks.get("first_audio"):
-                effective_audio = tracks["first_audio"]
-                self._on_log("INFO", f"No English audio; using first audio track ({effective_audio}) with English subs for: {source_file.name}")
-            if not effective_audio:
-                self._on_log("WARNING", f"No English audio track found for: {source_file.name}")
-                file_data["status"] = "Skipped"
-                continue
+            if file_data.get("tracks_from_user"):
+                stored_audio = file_data.get("audio_track")
+                if stored_audio is None:
+                    self._on_log(
+                        "ERROR",
+                        f"No audio track set for {source_file.name} (Set tracks chose no audio).",
+                    )
+                    file_data["status"] = "Error"
+                    continue
+                effective_audio = stored_audio
+                subtitle_track = file_data.get("subtitle_track")
+                self._on_log(
+                    "INFO",
+                    f"Using tracks from file list for: {source_file.name}",
+                )
+                file_data["audio_track"] = effective_audio
+                file_data["subtitle_track"] = subtitle_track
+            else:
+                self._on_log("INFO", f"Analyzing tracks for: {source_file.name}")
+                tracks = self.track_analyzer.analyze_tracks(source_file)
 
-            # Update file data with track info
-            file_data["audio_track"] = effective_audio
-            subtitle_track = tracks.get("subtitle")
-            using_japanese_audio = effective_audio == tracks.get("first_audio") and not tracks.get("audio")
-            if not subtitle_track and tracks.get("all_tracks"):
-                for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
-                    if track.get("type") != "subtitles":
-                        continue
-                    is_eng = self.track_analyzer._is_english_subtitle_track(track.get("language"), track.get("name"))
-                    is_signs = self.track_analyzer._is_signs_songs_track(track.get("name"))
-                    if is_eng and is_signs:
-                        subtitle_track = track["id"]
-                        self._on_log("INFO", f"Subtitle track {subtitle_track} (Signs & Songs) detected for {source_file.name}")
-                        tracks["subtitle"] = subtitle_track
-                        break
-                if not subtitle_track and using_japanese_audio:
-                    for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
-                        if track.get("type") == "subtitles" and self.track_analyzer._matches_english_subtitle_language(track.get("language")):
-                            subtitle_track = track["id"]
-                            self._on_log("INFO", f"Japanese-audio mode: using first English subtitle track {subtitle_track} for {source_file.name}")
-                            tracks["subtitle"] = subtitle_track
-                            break
-            file_data["subtitle_track"] = subtitle_track
+                if tracks.get("error"):
+                    self._on_log("ERROR", f"Track analysis failed: {tracks['error']}")
+                    file_data["status"] = "Error"
+                    continue
+
+                effective_audio, subtitle_track = compute_effective_tracks(
+                    tracks,
+                    self.track_analyzer,
+                    log_info=lambda msg: self._on_log("INFO", msg),
+                    source_label=source_file.name,
+                )
+                if not effective_audio:
+                    self._on_log(
+                        "WARNING",
+                        f"No English audio track found for: {source_file.name}",
+                    )
+                    file_data["status"] = "Skipped"
+                    continue
+
+                file_data["audio_track"] = effective_audio
+                file_data["subtitle_track"] = subtitle_track
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             
@@ -349,7 +350,11 @@ class HandBrakeTab(ctk.CTkFrame):
             output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
             
             # Check if output exists
-            if skip_existing and output_file.exists():
+            if (
+                skip_existing
+                and not file_data.get("reencode", False)
+                and output_file.exists()
+            ):
                 self._on_log("INFO", f"Skipping (exists): {output_file.name}")
                 file_data["status"] = "Skipped"
                 continue
@@ -372,6 +377,7 @@ class HandBrakeTab(ctk.CTkFrame):
             
             if success:
                 file_data["status"] = "Complete"
+                file_data["reencode"] = False
                 if output_file.exists():
                     file_data["output_path"] = output_file
                     file_data["output_size"] = output_file.stat().st_size

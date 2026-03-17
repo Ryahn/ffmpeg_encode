@@ -198,7 +198,10 @@ class FileListWidget(ctk.CTkFrame):
         size_str = file_data.get("size_str", "")
         if file_data.get("output_size") is not None:
             size_str = f"{size_str} → {self.scanner.format_file_size(file_data['output_size'])}"
-        return (sel, display_path, size_str, track_str, file_data.get("status", self.STATUS_PENDING))
+        status = file_data.get("status", self.STATUS_PENDING)
+        if file_data.get("reencode"):
+            status = f"{status} (re-encode)"
+        return (sel, display_path, size_str, track_str, status)
 
     def _refresh_row_display(self, index: int):
         if index < 0 or index >= len(self.files):
@@ -241,7 +244,12 @@ class FileListWidget(ctk.CTkFrame):
             sel, path_disp, size_str, track_str, status = self._row_values(file_data)
             self._tree.insert("", "end", iid=str(idx), text=sel, values=(path_disp, size_str, track_str, status))
 
-    def add_file(self, file_path: Path, relative_to: Optional[Path] = None) -> Dict:
+    def add_file(
+        self,
+        file_path: Path,
+        relative_to: Optional[Path] = None,
+        root: Optional[Path] = None,
+    ) -> Dict:
         if relative_to:
             try:
                 display_path = file_path.relative_to(relative_to)
@@ -250,12 +258,16 @@ class FileListWidget(ctk.CTkFrame):
         else:
             display_path = file_path
 
+        if root is None:
+            root = relative_to if relative_to else file_path.parent
+
         file_size = self.scanner.get_file_size(file_path)
         size_str = self.scanner.format_file_size(file_size)
 
         file_data = {
             "path": file_path,
             "display_path": display_path,
+            "root": root,
             "size": file_size,
             "size_str": size_str,
             "audio_track": None,
@@ -264,6 +276,8 @@ class FileListWidget(ctk.CTkFrame):
             "output_path": None,
             "output_size": None,
             "selected": False,
+            "reencode": False,
+            "tracks_from_user": False,
         }
 
         self.files.append(file_data)
@@ -306,8 +320,19 @@ class FileListWidget(ctk.CTkFrame):
     def get_selected_indices(self) -> List[int]:
         return [i for i, fd in enumerate(self.files) if fd.get("selected", False)]
 
+    def _get_tree_selected_indices(self) -> List[int]:
+        indices = []
+        for iid in self._tree.selection():
+            if isinstance(iid, str) and iid.isdigit():
+                idx = int(iid)
+                if 0 <= idx < len(self.files):
+                    indices.append(idx)
+        return indices
+
     def remove_selected_files(self) -> int:
-        selected_indices = self.get_selected_indices()
+        selected_indices = self._get_tree_selected_indices()
+        if not selected_indices:
+            selected_indices = self.get_selected_indices()
         if not selected_indices:
             return 0
         for index in sorted(selected_indices, reverse=True):
@@ -325,3 +350,19 @@ class FileListWidget(ctk.CTkFrame):
             file_data["selected"] = False
         for idx in range(len(self.files)):
             self._refresh_row_display(idx)
+
+    def get_action_target_indices(self) -> List[int]:
+        """Tree selection if any, else checkbox-selected rows; empty if neither."""
+        indices = self._get_tree_selected_indices()
+        if indices:
+            return sorted(set(indices))
+        return sorted(self.get_selected_indices())
+
+    def set_reencode_for_indices(self, indices: List[int], value: bool) -> int:
+        count = 0
+        for idx in indices:
+            if 0 <= idx < len(self.files):
+                self.files[idx]["reencode"] = value
+                self._refresh_row_display(idx)
+                count += 1
+        return count
