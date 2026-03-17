@@ -511,6 +511,13 @@ class FilesTab(ctk.CTkFrame):
                     )
 
             def apply_all():
+                # Guard against window being destroyed during worker thread delay
+                try:
+                    if not self.winfo_exists():
+                        return
+                except Exception:
+                    return
+                
                 no_audio_names: List[str] = []
                 for r in results:
                     if r["no_audio_name"]:
