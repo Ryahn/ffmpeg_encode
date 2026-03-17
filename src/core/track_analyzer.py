@@ -41,6 +41,7 @@ class TrackAnalyzer:
             # Hide console window on Windows (for release builds)
             run_kwargs = {
                 'args': [self.mkvinfo_path, str(file_path)],
+                'stdin': subprocess.DEVNULL,
                 'capture_output': True,
                 'text': True,
                 'timeout': 30
@@ -77,6 +78,7 @@ class TrackAnalyzer:
             # Hide console window on Windows (for release builds)
             run_kwargs = {
                 'args': [self.mkvinfo_path, str(file_path)],
+                'stdin': subprocess.DEVNULL,
                 'capture_output': True,
                 'text': True,
                 'timeout': 30

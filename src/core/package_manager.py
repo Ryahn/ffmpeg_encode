@@ -133,6 +133,7 @@ class PackageManager:
             # Hide console window on Windows (for release builds)
             run_kwargs = {
                 'args': [choco, "install", package, "-y"],
+                'stdin': subprocess.DEVNULL,
                 'capture_output': True,
                 'text': True,
                 'timeout': 600  # 10 minute timeout
@@ -162,6 +163,7 @@ class PackageManager:
             # Hide console window on Windows (for release builds)
             run_kwargs = {
                 'args': [brew, "install", package],
+                'stdin': subprocess.DEVNULL,
                 'capture_output': True,
                 'text': True,
                 'timeout': 600  # 10 minute timeout

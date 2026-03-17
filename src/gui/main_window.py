@@ -178,6 +178,23 @@ class MainWindow(ctk.CTk):
     def run(self):
         """Run the application"""
         def on_close() -> None:
+            # Stop any active encoders to ensure child processes are terminated
+            try:
+                if self.ffmpeg_tab and hasattr(self.ffmpeg_tab, 'is_encoding'):
+                    if self.ffmpeg_tab.is_encoding and hasattr(self.ffmpeg_tab, 'encoder'):
+                        logger.info("Stopping FFmpeg encoder on window close")
+                        self.ffmpeg_tab.encoder.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping FFmpeg encoder: {e}")
+            
+            try:
+                if self.handbrake_tab and hasattr(self.handbrake_tab, 'is_encoding'):
+                    if self.handbrake_tab.is_encoding and hasattr(self.handbrake_tab, 'encoder'):
+                        logger.info("Stopping HandBrake encoder on window close")
+                        self.handbrake_tab.encoder.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping HandBrake encoder: {e}")
+            
             config.flush()
             self.destroy()
 

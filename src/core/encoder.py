@@ -145,6 +145,7 @@ class Encoder:
                 # Hide console window on Windows (for release builds)
                 popen_kwargs = {
                     'args': args,
+                    'stdin': subprocess.DEVNULL,
                     'stdout': subprocess.PIPE,
                     'stderr': subprocess.PIPE,
                     'text': True,
@@ -456,6 +457,7 @@ class Encoder:
             try:
                 run_kw: Dict[str, Any] = {
                     "args": ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    "stdin": subprocess.DEVNULL,
                     "capture_output": True,
                     "timeout": 5,
                 }
@@ -479,11 +481,31 @@ class Encoder:
                         # On Windows, kill the process tree
                         self._kill_process_tree_windows(process.pid)
                     else:
-                        # On Unix, try kill first, then SIGKILL
-                        try:
-                            process.kill()
-                        except OSError:
-                            pass
+                        # On Unix, use psutil if available for tree kill, otherwise SIGKILL
+                        if HAS_PSUTIL:
+                            try:
+                                parent = psutil.Process(process.pid)
+                                children = parent.children(recursive=True)
+                                for child in children:
+                                    try:
+                                        child.kill()
+                                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                        pass
+                                try:
+                                    parent.kill()
+                                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                    pass
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                try:
+                                    process.kill()
+                                except OSError:
+                                    pass
+                        else:
+                            # Fallback: just SIGKILL the process (children should cascade if in same group)
+                            try:
+                                process.kill()
+                            except OSError:
+                                pass
         except OSError:
             pass
     
@@ -556,6 +578,7 @@ def extract_subtitle_stream(
         # Hide console window on Windows (for release builds)
         run_kwargs = {
             'args': args,
+            'stdin': subprocess.DEVNULL,
             'capture_output': True,
             'text': True,
             'timeout': 30

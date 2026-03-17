@@ -156,6 +156,7 @@ class DebugTab(ctk.CTkFrame):
             return
         run_kw = {
             "args": [mediainfo_path, str(self.current_file)],
+            "stdin": subprocess.DEVNULL,
             "capture_output": True,
             "text": True,
             "timeout": 30,
@@ -269,9 +270,9 @@ class DebugTab(ctk.CTkFrame):
             if sys.platform == "win32":
                 os.startfile(str(log_file))
             elif sys.platform == "darwin":
-                subprocess.run(["open", str(log_file)])
+                subprocess.run(["open", str(log_file)], stdin=subprocess.DEVNULL)
             else:
-                subprocess.run(["xdg-open", str(log_file)])
+                subprocess.run(["xdg-open", str(log_file)], stdin=subprocess.DEVNULL)
         except Exception as e:
             # Fallback: try to open with default editor
             try:
@@ -297,9 +298,9 @@ class DebugTab(ctk.CTkFrame):
             if sys.platform == "win32":
                 os.startfile(str(log_dir))
             elif sys.platform == "darwin":
-                subprocess.run(["open", str(log_dir)])
+                subprocess.run(["open", str(log_dir)], stdin=subprocess.DEVNULL)
             else:
-                subprocess.run(["xdg-open", str(log_dir)])
+                subprocess.run(["xdg-open", str(log_dir)], stdin=subprocess.DEVNULL)
         except Exception as e:
             pass
     

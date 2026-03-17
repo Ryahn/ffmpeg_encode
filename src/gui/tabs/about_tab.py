@@ -257,6 +257,7 @@ class AboutTab(ctk.CTkFrame):
             if tool_name == "FFmpeg":
                 result = subprocess.run(
                     [path, "-version"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -272,6 +273,7 @@ class AboutTab(ctk.CTkFrame):
             elif tool_name == "HandBrake CLI":
                 result = subprocess.run(
                     [path, "--version"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -287,6 +289,7 @@ class AboutTab(ctk.CTkFrame):
             elif tool_name == "mkvinfo (MKVToolNix)":
                 result = subprocess.run(
                     [path, "--version"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     text=True,
                     timeout=5

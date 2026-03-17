@@ -377,6 +377,17 @@ class FFmpegTab(ctk.CTkFrame):
         """Callback for when files list changes - update preview"""
         self._update_command_preview_display()
     
+    def _marshal_ui_update(self, func, *args, **kwargs):
+        """Marshal a UI update to the main thread via after()"""
+        self.after(0, func, *args, **kwargs)
+    
+    def _reset_ui_on_encode_end(self):
+        """Reset UI after encoding (safe from worker thread via marshaling)"""
+        self.is_encoding = False
+        self.start_button.configure(state="normal")
+        self.stop_button.configure(state="disabled")
+        self.progress_display.reset()
+    
     def _init_encoder(self):
         """Initialize encoder with paths from config"""
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
@@ -910,6 +921,10 @@ class FFmpegTab(ctk.CTkFrame):
         if self.is_encoding:
             return
         
+        # Ensure previous encoding thread has fully exited before starting new one
+        if self.encoding_thread and self.encoding_thread.is_alive():
+            self.encoding_thread.join(timeout=2.0)
+        
         self.is_encoding = True
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
@@ -1099,11 +1114,8 @@ class FFmpegTab(ctk.CTkFrame):
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
         
-        # Reset UI
-        self.is_encoding = False
-        self.start_button.configure(state="normal")
-        self.stop_button.configure(state="disabled")
-        self.progress_display.reset()
+        # Reset UI — marshal to main thread to avoid Tk threading issues
+        self._marshal_ui_update(self._reset_ui_on_encode_end)
     
     def _stop_encoding(self):
         """Stop encoding"""
@@ -1112,18 +1124,21 @@ class FFmpegTab(ctk.CTkFrame):
         self.is_encoding = False
     
     def _on_progress(self, progress: EncodingProgress):
-        """Handle progress update"""
-        if progress.percent is not None:
-            self.progress_display.set_progress(progress.percent)
-            status = f"{progress.percent:.1f}%"
-            if progress.eta:
-                status += f" - ETA: {progress.eta}"
-            self.progress_display.set_status(status)
-        elif progress.time:
-            status = f"Time: {progress.time}"
-            if progress.speed:
-                status += f" - Speed: {progress.speed:.2f}x"
-            self.progress_display.set_status(status)
+        """Handle progress update — marshal to main thread"""
+        def update_progress():
+            if progress.percent is not None:
+                self.progress_display.set_progress(progress.percent)
+                status = f"{progress.percent:.1f}%"
+                if progress.eta:
+                    status += f" - ETA: {progress.eta}"
+                self.progress_display.set_status(status)
+            elif progress.time:
+                status = f"Time: {progress.time}"
+                if progress.speed:
+                    status += f" - Speed: {progress.speed:.2f}x"
+                self.progress_display.set_status(status)
+        
+        self._marshal_ui_update(update_progress)
     
     def _parse_and_substitute_command(
         self,
@@ -1271,19 +1286,28 @@ class FFmpegTab(ctk.CTkFrame):
         return args
     
     def _on_log(self, level: str, message: str):
-        """Handle log message"""
+        """Handle log message — marshal to main thread"""
         if level == "DEBUG" and not config.get_debug_logging():
             return
-        self.log_viewer.add_log(level, message)
-        prefixed_message = f"[FFmpeg] {message}"
-        if level == "ERROR":
-            logger.error(prefixed_message)
-        elif level == "WARNING":
-            logger.warning(prefixed_message)
-        elif level == "SUCCESS":
-            logger.success(prefixed_message)
-        elif level == "DEBUG":
-            logger.debug(prefixed_message)
-        else:  # INFO or default
-            logger.info(prefixed_message)
+        
+        def update_log():
+            self.log_viewer.add_log(level, message)
+        
+        def log_to_file():
+            prefixed_message = f"[FFmpeg] {message}"
+            if level == "ERROR":
+                logger.error(prefixed_message)
+            elif level == "WARNING":
+                logger.warning(prefixed_message)
+            elif level == "SUCCESS":
+                logger.success(prefixed_message)
+            elif level == "DEBUG":
+                logger.debug(prefixed_message)
+            else:  # INFO or default
+                logger.info(prefixed_message)
+        
+        # Marshal log viewer update to main thread
+        self._marshal_ui_update(update_log)
+        # File logging can happen on the worker thread (no Tk involvement)
+        log_to_file()
 
