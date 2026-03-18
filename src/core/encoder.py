@@ -27,6 +27,11 @@ except ImportError:
     HAS_PSUTIL = False
 
 
+def _windows_taskkill_path() -> str:
+    exe = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+    return str(exe) if exe.is_file() else "taskkill"
+
+
 class EncodingProgress:
     """Represents encoding progress"""
     
@@ -198,21 +203,9 @@ class Encoder:
             while process.poll() is None:
                 if self._stop_event.is_set():
                     self._log("INFO", "Stop event set, terminating process...")
+                    # Kill before closing pipes (closing first can deadlock with reader threads)
+                    self._ensure_encoder_dead(process)
                     self._close_pipes(process)
-                    try:
-                        process.terminate()
-                    except OSError:
-                        pass
-                    try:
-                        process.wait(timeout=1)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            if sys.platform == 'win32':
-                                self._kill_process_tree_windows(process.pid)
-                            else:
-                                process.kill()
-                        except OSError:
-                            pass
                     with self._process_lock:
                         self._current_process = None
                     return False
@@ -220,6 +213,18 @@ class Encoder:
                 self._drain_stdout_queue(stdout_queue, encoder_name)
                 self._drain_stderr_queue(stderr_queue, encoder_name)
                 time.sleep(0.05)
+
+            # stop() may have taskkilled from another thread while we were sleeping
+            if self._stop_event.is_set():
+                self._log("INFO", "Encode stopped (process ended after stop request)")
+                self._close_pipes(process)
+                with self._process_lock:
+                    self._current_process = None
+                if stdout_thread.is_alive():
+                    stdout_thread.join(timeout=1)
+                if stderr_thread.is_alive():
+                    stderr_thread.join(timeout=1)
+                return False
             
             # Get remaining output
             self._log("INFO", f"Process finished with return code: {process.returncode}")
@@ -453,10 +458,10 @@ class Encoder:
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             
-            # Fallback: Use taskkill command on Windows
+            # Fallback: Use taskkill command on Windows (full path for frozen/PATH-less runs)
             try:
                 run_kw: Dict[str, Any] = {
-                    "args": ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    "args": [_windows_taskkill_path(), "/F", "/T", "/PID", str(pid)],
                     "stdin": subprocess.DEVNULL,
                     "capture_output": True,
                     "timeout": 5,
@@ -465,47 +470,6 @@ class Encoder:
                 subprocess.run(**run_kw)
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 pass
-        except OSError:
-            pass
-    
-    def _force_kill_process(self, process: subprocess.Popen):
-        """Forcefully kill a process and its children (runs in separate thread)"""
-        try:
-            if process.poll() is None:
-                # Process is still running, wait a bit for graceful termination
-                time.sleep(0.5)
-                
-                if process.poll() is None:
-                    # Still running, force kill
-                    if sys.platform == 'win32':
-                        # On Windows, kill the process tree
-                        self._kill_process_tree_windows(process.pid)
-                    else:
-                        # On Unix, use psutil if available for tree kill, otherwise SIGKILL
-                        if HAS_PSUTIL:
-                            try:
-                                parent = psutil.Process(process.pid)
-                                children = parent.children(recursive=True)
-                                for child in children:
-                                    try:
-                                        child.kill()
-                                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                                        pass
-                                try:
-                                    parent.kill()
-                                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                                    pass
-                            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                                try:
-                                    process.kill()
-                                except OSError:
-                                    pass
-                        else:
-                            # Fallback: just SIGKILL the process (children should cascade if in same group)
-                            try:
-                                process.kill()
-                            except OSError:
-                                pass
         except OSError:
             pass
     
@@ -521,29 +485,72 @@ class Encoder:
                 process.stderr.close()
         except OSError:
             pass
+
+    def _ensure_encoder_dead(self, process: subprocess.Popen) -> None:
+        """Force-kill encoder until reaped. Windows: taskkill /F /T (full System32 path); Unix: SIGKILL."""
+        pid = process.pid
+        if pid is None:
+            return
+        if sys.platform == "win32":
+            taskkill_exe = _windows_taskkill_path()
+            for attempt in range(30):
+                if process.poll() is not None:
+                    return
+                try:
+                    run_kw: Dict[str, Any] = {
+                        "args": [taskkill_exe, "/F", "/T", "/PID", str(pid)],
+                        "stdin": subprocess.DEVNULL,
+                        "capture_output": True,
+                        "text": True,
+                        "timeout": 45,
+                    }
+                    run_kw.update(get_subprocess_kwargs())
+                    result = subprocess.run(**run_kw)
+                    if process.poll() is not None:
+                        return
+                    err = (result.stderr or result.stdout or "").strip()
+                    if err and attempt == 0:
+                        self._log("WARNING", f"taskkill PID {pid} rc={result.returncode}: {err[:300]}")
+                    elif result.returncode != 0 and attempt == 0:
+                        self._log("WARNING", f"taskkill PID {pid} exited {result.returncode}")
+                except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+                    self._log("WARNING", f"taskkill PID {pid} attempt {attempt + 1}: {e}")
+                time.sleep(0.2)
+            if process.poll() is None:
+                self._log("ERROR", f"Encoder PID {pid} still running after repeated taskkill; try Task Manager")
+        else:
+            for _ in range(25):
+                if process.poll() is not None:
+                    return
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                time.sleep(0.15)
+            if process.poll() is None and HAS_PSUTIL:
+                try:
+                    p = psutil.Process(pid)
+                    for child in p.children(recursive=True):
+                        try:
+                            child.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    p.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
     
     def stop(self):
         """Stop the current encoding with forceful termination"""
         self._stop_event.set()
-        
         with self._process_lock:
-            if self._current_process:
-                try:
-                    # Close pipes to unblock reading threads
-                    self._close_pipes(self._current_process)
-                    
-                    # Terminate immediately, don't wait
-                    try:
-                        self._current_process.terminate()
-                    except OSError:
-                        pass
-                    threading.Thread(
-                        target=self._force_kill_process,
-                        args=(self._current_process,),
-                        daemon=True
-                    ).start()
-                except OSError:
-                    pass
+            proc = self._current_process
+        # Do NOT call _close_pipes here: it can block/deadlock with reader threads on Windows
+        # and would prevent the killer thread from ever starting. Killer runs taskkill first.
+        if proc:
+            threading.Thread(
+                target=lambda p=proc: self._ensure_encoder_dead(p),
+                daemon=True,
+            ).start()
     
     def reset_stop_event(self):
         """Reset the stop event"""

@@ -423,7 +423,8 @@ class HandBrakeTab(ctk.CTkFrame):
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             
-            # Encode
+            # Encode with timing
+            file_start_time = time.time()
             success = self.encoder.encode_with_handbrake(
                 input_file=source_file,
                 output_file=output_file,
@@ -433,6 +434,7 @@ class HandBrakeTab(ctk.CTkFrame):
                 subtitle_track=subtitle_track,
                 dry_run=dry_run
             )
+            file_elapsed_time = time.time() - file_start_time
             
             if success:
                 file_data["status"] = "Complete"
@@ -448,7 +450,7 @@ class HandBrakeTab(ctk.CTkFrame):
                 if self.batch_stats:
                     self.batch_stats.add_file_result(
                         filename=source_file.name,
-                        elapsed=0,  # Encoder doesn't track per-file time, so use 0
+                        elapsed=file_elapsed_time,
                         input_size=input_size,
                         output_size=output_size,
                         success=True
@@ -472,6 +474,21 @@ class HandBrakeTab(ctk.CTkFrame):
             
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
+            
+            # Calculate and display batch ETA if enough files completed
+            if self.batch_stats and completed_count >= 3:
+                eta = self.batch_stats.calculate_batch_eta(len(files), completed_count)
+                if eta:
+                    self._on_log("INFO", f"Batch ETA: {eta}")
+                    
+                    # Also update progress display with ETA
+                    def update_eta():
+                        current_status = self.progress_display.status_label.cget("text")
+                        # Only update if ETA not already in the status
+                        if "Batch ETA" not in current_status:
+                            self.progress_display.set_status(f"Batch ETA: {eta}")
+                    
+                    self._marshal_ui_update(update_eta)
         
         # Calculate elapsed time and send completion notification
         if self.batch_stats:
