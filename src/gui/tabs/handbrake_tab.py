@@ -5,14 +5,18 @@ from tkinter import filedialog, messagebox
 from pathlib import Path
 from typing import Optional, Callable
 import threading
+import time
 
 from ..widgets.progress_bar import ProgressDisplay
 from ..widgets.log_viewer import LogViewer
+from ..widgets.toast import ToastManager
 from core.preset_parser import PresetParser
 from core.encoder import Encoder, EncodingProgress
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import compute_effective_tracks
 from core.ffmpeg_translator import FFmpegTranslator
+from core.notifications import BatchNotification
+from core.batch_stats import BatchStats
 from utils.config import config
 from utils.logger import logger
 
@@ -29,6 +33,8 @@ class HandBrakeTab(ctk.CTkFrame):
         self.track_analyzer: Optional[TrackAnalyzer] = None
         self.encoding_thread: Optional[threading.Thread] = None
         self.is_encoding = False
+        self.batch_stats: Optional[BatchStats] = None
+        self.toast_manager: Optional[object] = None
         self.get_files_callback: Optional[Callable] = None
         self.update_file_callback: Optional[Callable] = None
         self.get_output_path_callback: Optional[Callable] = None
@@ -265,16 +271,16 @@ class HandBrakeTab(ctk.CTkFrame):
     def _start_encoding(self):
         """Start encoding process"""
         if not self.preset_parser:
-            messagebox.showwarning("No Preset", "Please load a HandBrake preset first")
+            self._show_toast("Please load a HandBrake preset first", "warning")
             return
         
         if not self.get_files_callback:
-            messagebox.showwarning("No Files", "No files available. Please scan for files first.")
+            self._show_toast("No files available. Please scan for files first.", "warning")
             return
         
         files = self.get_files_callback()
         if not files:
-            messagebox.showwarning("No Files", "No files to encode")
+            self._show_toast("No files to encode", "warning")
             return
         
         if self.is_encoding:
@@ -291,6 +297,9 @@ class HandBrakeTab(ctk.CTkFrame):
         # Reset encoder stop event so next run isn't blocked
         if self.encoder:
             self.encoder.reset_stop_event()
+        
+        # Initialize batch statistics
+        self.batch_stats = BatchStats()
         
         # Start encoding in thread
         self.encoding_thread = threading.Thread(
@@ -309,6 +318,12 @@ class HandBrakeTab(ctk.CTkFrame):
         
         # Get output folder from files tab
         # This will be handled by the main window
+        
+        # Track batch statistics
+        batch_start_time = time.time()
+        completed_count = 0
+        skipped_count = 0
+        error_count = 0
         
         for i, file_data in enumerate(files):
             if not self.is_encoding:
@@ -340,6 +355,7 @@ class HandBrakeTab(ctk.CTkFrame):
                 if tracks.get("error"):
                     self._on_log("ERROR", f"Track analysis failed: {tracks['error']}")
                     file_data["status"] = "Error"
+                    error_count += 1
                     continue
 
                 effective_audio, subtitle_track = compute_effective_tracks(
@@ -354,6 +370,18 @@ class HandBrakeTab(ctk.CTkFrame):
                         f"No English audio track found for: {source_file.name}",
                     )
                     file_data["status"] = "Skipped"
+                    
+                    if self.batch_stats:
+                        self.batch_stats.add_file_result(
+                            filename=source_file.name,
+                            elapsed=0,
+                            input_size=0,
+                            output_size=0,
+                            success=False,
+                            skipped=True
+                        )
+                    
+                    skipped_count += 1
                     continue
 
                 file_data["audio_track"] = effective_audio
@@ -376,6 +404,18 @@ class HandBrakeTab(ctk.CTkFrame):
             ):
                 self._on_log("INFO", f"Skipping (exists): {output_file.name}")
                 file_data["status"] = "Skipped"
+                
+                if self.batch_stats:
+                    self.batch_stats.add_file_result(
+                        filename=source_file.name,
+                        elapsed=0,
+                        input_size=0,
+                        output_size=0,
+                        success=False,
+                        skipped=True
+                    )
+                
+                skipped_count += 1
                 continue
             
             # Update status
@@ -397,23 +437,84 @@ class HandBrakeTab(ctk.CTkFrame):
             if success:
                 file_data["status"] = "Complete"
                 file_data["reencode"] = False
+                input_size = source_file.stat().st_size if source_file.exists() else 0
+                output_size = 0
                 if output_file.exists():
                     file_data["output_path"] = output_file
-                    file_data["output_size"] = output_file.stat().st_size
+                    output_size = output_file.stat().st_size
+                    file_data["output_size"] = output_size
+                
+                # Record statistics
+                if self.batch_stats:
+                    self.batch_stats.add_file_result(
+                        filename=source_file.name,
+                        elapsed=0,  # Encoder doesn't track per-file time, so use 0
+                        input_size=input_size,
+                        output_size=output_size,
+                        success=True
+                    )
+                
+                completed_count += 1
             else:
                 file_data["status"] = "Error"
+                
+                if self.batch_stats:
+                    self.batch_stats.add_file_result(
+                        filename=source_file.name,
+                        elapsed=0,
+                        input_size=0,
+                        output_size=0,
+                        success=False,
+                        error_msg="Encoding failed"
+                    )
+                
+                error_count += 1
             
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
+        
+        # Calculate elapsed time and send completion notification
+        if self.batch_stats:
+            summary = self.batch_stats.summary_text()
+            
+            # Show summary as in-app toast
+            def show_summary():
+                widget = self.master
+                max_depth = 10
+                depth = 0
+                
+                while widget and depth < max_depth:
+                    if hasattr(widget, "toast_manager"):
+                        toast_type = "error" if error_count > 0 else "success"
+                        widget.toast_manager.show(summary, message_type=toast_type, duration=5)
+                        return
+                    widget = getattr(widget, "master", None)
+                    depth += 1
+            
+            self._marshal_ui_update(show_summary)
+            
+            # Also send via notification system (displays in app-managed toasts)
+            BatchNotification.send_completion(
+                completed=completed_count,
+                skipped=skipped_count,
+                errors=error_count,
+                total=self.batch_stats.get_total_files(),
+                elapsed_time=self.batch_stats.get_elapsed_time_str()
+            )
         
         # Reset UI — marshal to main thread to avoid Tk threading issues
         self._marshal_ui_update(self._reset_ui_on_encode_end)
     
     def _stop_encoding(self):
-        """Stop encoding"""
-        if self.encoder:
-            self.encoder.stop()
-        self.is_encoding = False
+        """Stop encoding (runs in background thread to avoid UI freeze)"""
+        # Run stop in a background thread to prevent UI freeze
+        def stop_worker():
+            if self.encoder:
+                self.encoder.stop()
+            self.is_encoding = False
+        
+        # Use daemon thread so it doesn't block the UI
+        threading.Thread(target=stop_worker, daemon=True).start()
     
     def _on_progress(self, progress: EncodingProgress):
         """Handle progress update — marshal to main thread"""
@@ -457,4 +558,18 @@ class HandBrakeTab(ctk.CTkFrame):
         self._marshal_ui_update(update_log)
         # File logging can happen on the worker thread (no Tk involvement)
         log_to_file()
+    
+    def _show_toast(self, message: str, message_type: str = "info") -> None:
+        """Show in-app toast notification"""
+        # Traverse up the widget hierarchy to find MainWindow
+        widget = self.master
+        max_depth = 10
+        depth = 0
+        
+        while widget and depth < max_depth:
+            if hasattr(widget, "toast_manager"):
+                widget.toast_manager.show(message, message_type=message_type, duration=3)
+                return
+            widget = getattr(widget, "master", None)
+            depth += 1
 

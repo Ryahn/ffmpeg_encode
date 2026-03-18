@@ -11,7 +11,9 @@ from .tabs.ffmpeg_tab import FFmpegTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.debug_tab import DebugTab
 from .tabs.about_tab import AboutTab
+from .widgets.toast import ToastManager
 from core.package_manager import PackageManager
+from core.notifications import BatchNotification
 from utils.config import config
 from utils.logger import logger
 
@@ -32,6 +34,10 @@ class MainWindow(ctk.CTk):
         # Set appearance
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
+        
+        # Initialize toast manager and notifications
+        self.toast_manager = ToastManager(self)
+        BatchNotification.set_toast_manager(self.toast_manager)
         
         # Initialize package manager
         self.package_manager = PackageManager()

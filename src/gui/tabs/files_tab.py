@@ -1,6 +1,7 @@
 """Files tab for managing video files"""
 
 import threading
+import logging
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, StringVar
@@ -8,11 +9,14 @@ from pathlib import Path
 from typing import Optional, Callable, List
 
 from ..widgets.file_list import FileListWidget
+from ..widgets.toast import ToastManager
 from ..dialogs.set_tracks_dialog import show_set_tracks_dialog
 from core.file_scanner import FileScanner
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import compute_effective_tracks
 from utils.config import config
+
+logger = logging.getLogger(__name__)
 
 
 class FilesTab(ctk.CTkFrame):
@@ -24,6 +28,7 @@ class FilesTab(ctk.CTkFrame):
         self.scanner = FileScanner()
         self.scan_folder: Optional[Path] = None
         self.output_folder: Optional[Path] = None
+        self.toast_manager: Optional[object] = None
         self.on_files_changed: Optional[Callable] = None
         self.on_status: Optional[Callable[[str], None]] = None
 
@@ -353,27 +358,33 @@ class FilesTab(ctk.CTkFrame):
     
     def _scan_folder(self):
         """Scan folder for video files"""
+        logger.debug(f"_scan_folder called, self.scan_folder={self.scan_folder}")
+        
         if not self.scan_folder:
-            messagebox.showwarning("No Folder", "Please select a scan folder first")
+            logger.debug("No scan folder selected, showing warning toast")
+            self._show_toast("Please select a scan folder first", "warning")
             return
+        
+        logger.debug(f"Scanning folder: {self.scan_folder}")
         
         # Clear existing files
         self.file_list.clear()
         
         # Scan for files
         files = self.scanner.scan_directory(self.scan_folder, recursive=True)
+        logger.debug(f"Found {len(files)} files")
         
         # Add files to list
         for file_path in files:
             self.file_list.add_file(file_path, relative_to=self.scan_folder, root=self.scan_folder)
         
+        logger.debug(f"Showing completion toast with {len(files)} files")
         if self.on_files_changed:
             self.on_files_changed()
         self._update_preview()
-        messagebox.showinfo(
-            "Scan Complete",
-            f"Found {len(files)} video file(s)"
-        )
+        
+        # Show completion toast instead of messagebox
+        self._show_toast(f"Found {len(files)} video file(s)", "success")
     
     def _add_files(self):
         """Add individual files"""
@@ -401,9 +412,9 @@ class FilesTab(ctk.CTkFrame):
             if self.on_files_changed:
                 self.on_files_changed()
             self._update_preview()
-            messagebox.showinfo("Files Removed", f"Removed {selected_count} file(s) from the list.")
+            self._show_toast(f"Removed {selected_count} file(s) from the list.", "info")
         else:
-            messagebox.showwarning("No Selection", "Please select one or more files to remove.")
+            self._show_toast("Please select one or more files to remove.", "warning")
     
     def _clear_all(self):
         """Clear all files"""
@@ -441,14 +452,14 @@ class FilesTab(ctk.CTkFrame):
         if not indices:
             return
         count = self.file_list.set_reencode_for_indices(indices, False)
-        messagebox.showinfo("Re-encode", f"Cleared re-encode mark on {count} file(s).")
+        self._show_toast(f"Cleared re-encode mark on {count} file(s).", "info")
 
     def _load_tracks(self):
         if self._load_tracks_busy:
             return
         files = self.file_list.get_files()
         if not files:
-            messagebox.showwarning("No Files", "Add files to the list first.")
+            self._show_toast("Add files to the list first.", "warning")
             return
         if not self.track_analyzer.mkvinfo_path and not self.track_analyzer.ffprobe_path:
             messagebox.showerror(
@@ -703,4 +714,25 @@ class FilesTab(ctk.CTkFrame):
         output_dir = self.output_folder / source_file.parent.name
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+    
+    def _show_toast(self, message: str, message_type: str = "info") -> None:
+        """Show in-app toast notification"""
+        logger.debug(f"_show_toast called: message='{message}', type='{message_type}'")
+        logger.debug(f"self.master type: {type(self.master)}")
+        
+        # Traverse up the widget hierarchy to find MainWindow
+        widget = self.master
+        max_depth = 10
+        depth = 0
+        
+        while widget and depth < max_depth:
+            logger.debug(f"Depth {depth}: widget type = {type(widget)}, has toast_manager = {hasattr(widget, 'toast_manager')}")
+            if hasattr(widget, "toast_manager"):
+                logger.debug(f"Found toast_manager at depth {depth}!")
+                widget.toast_manager.show(message, message_type=message_type, duration=3)
+                return
+            widget = getattr(widget, "master", None)
+            depth += 1
+        
+        logger.warning(f"Could not find toast_manager after traversing {depth} levels")
 

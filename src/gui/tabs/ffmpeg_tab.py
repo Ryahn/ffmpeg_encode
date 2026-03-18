@@ -8,14 +8,18 @@ import threading
 import tempfile
 import shlex
 import re
+import time
 
 from ..widgets.progress_bar import ProgressDisplay
 from ..widgets.log_viewer import LogViewer
+from ..widgets.toast import ToastManager
 from core.preset_parser import PresetParser
 from core.encoder import Encoder, EncodingProgress, extract_subtitle_stream
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import compute_effective_tracks
 from core.ffmpeg_translator import FFmpegTranslator
+from core.notifications import BatchNotification
+from core.batch_stats import BatchStats
 from utils.config import config
 from utils.logger import logger
 
@@ -32,6 +36,8 @@ class FFmpegTab(ctk.CTkFrame):
         self.track_analyzer: Optional[TrackAnalyzer] = None
         self.encoding_thread: Optional[threading.Thread] = None
         self.is_encoding = False
+        self.batch_stats: Optional[BatchStats] = None
+        self.toast_manager: Optional[object] = None
         self.get_files_callback: Optional[Callable] = None
         self.update_file_callback: Optional[Callable] = None
         self.get_output_path_callback: Optional[Callable] = None
@@ -906,16 +912,16 @@ class FFmpegTab(ctk.CTkFrame):
         # Check if there's a command (either from preset or edited)
         command = self.cmd_text.get("1.0", "end-1c").strip()
         if not command:
-            messagebox.showwarning("No Command", "Please load a preset or enter an FFmpeg command")
+            self._show_toast("Please load a preset or enter an FFmpeg command", "warning")
             return
         
         if not self.get_files_callback:
-            messagebox.showwarning("No Files", "No files available. Please scan for files first.")
+            self._show_toast("No files available. Please scan for files first.", "warning")
             return
         
         files = self.get_files_callback()
         if not files:
-            messagebox.showwarning("No Files", "No files to encode")
+            self._show_toast("No files to encode", "warning")
             return
         
         if self.is_encoding:
@@ -933,6 +939,9 @@ class FFmpegTab(ctk.CTkFrame):
         if self.encoder:
             self.encoder.reset_stop_event()
         
+        # Initialize batch statistics
+        self.batch_stats = BatchStats()
+        
         # Start encoding in thread
         self.encoding_thread = threading.Thread(
             target=self._encode_files,
@@ -949,6 +958,12 @@ class FFmpegTab(ctk.CTkFrame):
         mode = self.mode_var.get()
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
         
+        # Track batch statistics
+        batch_start_time = time.time()
+        completed_count = 0
+        skipped_count = 0
+        error_count = 0
+        
         for i, file_data in enumerate(files):
             if not self.is_encoding:
                 break
@@ -963,6 +978,7 @@ class FFmpegTab(ctk.CTkFrame):
                         f"No audio track set for {source_file.name} (Set tracks chose no audio).",
                     )
                     file_data["status"] = "Error"
+                    error_count += 1
                     continue
                 effective_audio = stored_audio
                 subtitle_track = file_data.get("subtitle_track")
@@ -979,6 +995,7 @@ class FFmpegTab(ctk.CTkFrame):
                 if tracks.get("error"):
                     self._on_log("ERROR", f"Track analysis failed: {tracks['error']}")
                     file_data["status"] = "Error"
+                    error_count += 1
                     continue
 
                 effective_audio, subtitle_track = compute_effective_tracks(
@@ -990,9 +1007,21 @@ class FFmpegTab(ctk.CTkFrame):
                 if not effective_audio:
                     self._on_log(
                         "WARNING",
-                        f"No English audio track found for: {source_file.name}",
+                        f"No English audio track found: {source_file.name}",
                     )
                     file_data["status"] = "Skipped"
+                    
+                    if self.batch_stats:
+                        self.batch_stats.add_file_result(
+                            filename=source_file.name,
+                            elapsed=0,
+                            input_size=0,
+                            output_size=0,
+                            success=False,
+                            skipped=True
+                        )
+                    
+                    skipped_count += 1
                     continue
 
                 file_data["audio_track"] = effective_audio
@@ -1015,6 +1044,18 @@ class FFmpegTab(ctk.CTkFrame):
             ):
                 self._on_log("INFO", f"Skipping (exists): {output_file.name}")
                 file_data["status"] = "Skipped"
+                
+                if self.batch_stats:
+                    self.batch_stats.add_file_result(
+                        filename=source_file.name,
+                        elapsed=0,
+                        input_size=0,
+                        output_size=0,
+                        success=False,
+                        skipped=True
+                    )
+                
+                skipped_count += 1
                 continue
             
             # Update status
@@ -1047,6 +1088,7 @@ class FFmpegTab(ctk.CTkFrame):
             if not command_template:
                 self._on_log("ERROR", "No FFmpeg command found in textbox")
                 file_data["status"] = "Error"
+                error_count += 1
                 if self.update_file_callback:
                     self.update_file_callback(i, file_data)
                 continue
@@ -1066,6 +1108,7 @@ class FFmpegTab(ctk.CTkFrame):
                 if not ffmpeg_args:
                     self._on_log("ERROR", "Command parsing resulted in empty arguments")
                     file_data["status"] = "Error"
+                    error_count += 1
                     if self.update_file_callback:
                         self.update_file_callback(i, file_data)
                     continue
@@ -1075,6 +1118,7 @@ class FFmpegTab(ctk.CTkFrame):
                 import traceback
                 self._on_log("ERROR", f"Traceback: {traceback.format_exc()}")
                 file_data["status"] = "Error"
+                error_count += 1
                 if self.update_file_callback:
                     self.update_file_callback(i, file_data)
                 continue
@@ -1105,23 +1149,84 @@ class FFmpegTab(ctk.CTkFrame):
             if success:
                 file_data["status"] = "Complete"
                 file_data["reencode"] = False
+                input_size = source_file.stat().st_size if source_file.exists() else 0
+                output_size = 0
                 if output_file.exists():
                     file_data["output_path"] = output_file
-                    file_data["output_size"] = output_file.stat().st_size
+                    output_size = output_file.stat().st_size
+                    file_data["output_size"] = output_size
+                
+                # Record statistics
+                if self.batch_stats:
+                    self.batch_stats.add_file_result(
+                        filename=source_file.name,
+                        elapsed=0,
+                        input_size=input_size,
+                        output_size=output_size,
+                        success=True
+                    )
+                
+                completed_count += 1
             else:
                 file_data["status"] = "Error"
+                
+                if self.batch_stats:
+                    self.batch_stats.add_file_result(
+                        filename=source_file.name,
+                        elapsed=0,
+                        input_size=0,
+                        output_size=0,
+                        success=False,
+                        error_msg="Encoding failed"
+                    )
+                
+                error_count += 1
             
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
+        
+        # Calculate elapsed time and send completion notification
+        if self.batch_stats:
+            summary = self.batch_stats.summary_text()
+            
+            # Show summary as in-app toast
+            def show_summary():
+                widget = self.master
+                max_depth = 10
+                depth = 0
+                
+                while widget and depth < max_depth:
+                    if hasattr(widget, "toast_manager"):
+                        toast_type = "error" if error_count > 0 else "success"
+                        widget.toast_manager.show(summary, message_type=toast_type, duration=5)
+                        return
+                    widget = getattr(widget, "master", None)
+                    depth += 1
+            
+            self._marshal_ui_update(show_summary)
+            
+            # Also send via notification system (displays in app-managed toasts)
+            BatchNotification.send_completion(
+                completed=completed_count,
+                skipped=skipped_count,
+                errors=error_count,
+                total=self.batch_stats.get_total_files(),
+                elapsed_time=self.batch_stats.get_elapsed_time_str()
+            )
         
         # Reset UI — marshal to main thread to avoid Tk threading issues
         self._marshal_ui_update(self._reset_ui_on_encode_end)
     
     def _stop_encoding(self):
-        """Stop encoding"""
-        if self.encoder:
-            self.encoder.stop()
-        self.is_encoding = False
+        """Stop encoding (runs in background thread to avoid UI freeze)"""
+        # Run stop in a background thread to prevent UI freeze
+        def stop_worker():
+            if self.encoder:
+                self.encoder.stop()
+            self.is_encoding = False
+        
+        # Use daemon thread so it doesn't block the UI
+        threading.Thread(target=stop_worker, daemon=True).start()
     
     def _on_progress(self, progress: EncodingProgress):
         """Handle progress update — marshal to main thread"""
@@ -1310,4 +1415,18 @@ class FFmpegTab(ctk.CTkFrame):
         self._marshal_ui_update(update_log)
         # File logging can happen on the worker thread (no Tk involvement)
         log_to_file()
+    
+    def _show_toast(self, message: str, message_type: str = "info") -> None:
+        """Show in-app toast notification"""
+        # Traverse up the widget hierarchy to find MainWindow
+        widget = self.master
+        max_depth = 10
+        depth = 0
+        
+        while widget and depth < max_depth:
+            if hasattr(widget, "toast_manager"):
+                widget.toast_manager.show(message, message_type=message_type, duration=3)
+                return
+            widget = getattr(widget, "master", None)
+            depth += 1
 
