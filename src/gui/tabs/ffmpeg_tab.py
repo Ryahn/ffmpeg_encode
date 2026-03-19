@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -55,6 +55,21 @@ from utils.config import config
 from utils.logger import logger
 
 
+class _AnalyzeOneWorker(QObject):
+    """Runs analyze_tracks() for a single file off the GUI thread."""
+
+    finished = pyqtSignal(object, object)  # (tracks_dict, source_file)
+
+    def __init__(self, source_file: Path, analyzer: TrackAnalyzer):
+        super().__init__()
+        self._source_file = source_file
+        self._analyzer = analyzer
+
+    def run(self) -> None:
+        tracks = self._analyzer.analyze_tracks(self._source_file)
+        self.finished.emit(tracks, self._source_file)
+
+
 class _FFmpegUiBridge(QObject):
     log_msg = pyqtSignal(str, str)
     progress = pyqtSignal(object)
@@ -80,6 +95,7 @@ class FFmpegTab(QWidget):
         self.encoder: Optional[Encoder] = None
         self.track_analyzer: Optional[TrackAnalyzer] = None
         self.encoding_thread: Optional[threading.Thread] = None
+        self._detect_thread: Optional[QThread] = None
         self.is_encoding = False
         self.batch_stats: Optional[BatchStats] = None
         self.get_files_callback: Optional[Callable] = None
@@ -108,7 +124,8 @@ class FFmpegTab(QWidget):
         self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
         pr.addWidget(self.preset_combo)
         pr.addWidget(self._btn("Load Preset", self._load_preset))
-        pr.addWidget(self._btn("Detect Tracks", self._detect_and_update_tracks))
+        self.detect_tracks_btn = self._btn("Detect Tracks", self._detect_and_update_tracks)
+        pr.addWidget(self.detect_tracks_btn)
         root.addWidget(preset_gb)
 
         cmd_gb = QGroupBox("FFmpeg command (editable)")
@@ -556,12 +573,28 @@ class FFmpegTab(QWidget):
         if not source_file.exists():
             QMessageBox.critical(self, "Not Found", str(source_file))
             return
-        self._on_log("INFO", f"Analyzing tracks for: {source_file.name}")
         if not self.track_analyzer:
             QMessageBox.critical(self, "No Analyzer", "Track analyzer not available.")
             return
+
+        self._on_log("INFO", f"Analyzing tracks for: {source_file.name}")
+        self.detect_tracks_btn.setEnabled(False)
+
+        self._detect_thread = QThread()
+        worker = _AnalyzeOneWorker(source_file, self.track_analyzer)
+        worker.moveToThread(self._detect_thread)
+        self._detect_thread.started.connect(worker.run)
+        worker.finished.connect(
+            lambda tracks, sf: self._on_detect_tracks_done(tracks, sf, files)
+        )
+        worker.finished.connect(self._detect_thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        self._detect_thread.finished.connect(self._detect_thread.deleteLater)
+        self._detect_thread.start()
+
+    def _on_detect_tracks_done(self, tracks: dict, source_file: Path, files: list) -> None:
+        self.detect_tracks_btn.setEnabled(True)
         try:
-            tracks = self.track_analyzer.analyze_tracks(source_file)
             if tracks.get("error"):
                 QMessageBox.critical(self, "Failed", tracks["error"])
                 return
@@ -604,7 +637,6 @@ class FFmpegTab(QWidget):
             self.get_files_callback,
             self.get_output_path_callback,
             self.suffix_entry.text() or config.get_default_output_suffix(),
-            self.track_analyzer,
         )
 
     def _update_command_preview_display(self) -> None:

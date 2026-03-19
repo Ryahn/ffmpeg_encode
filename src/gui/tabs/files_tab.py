@@ -32,6 +32,25 @@ from utils.config import config
 logger = logging.getLogger(__name__)
 
 
+class _AnalyzeOneWorker(QObject):
+    """Runs analyze_tracks() for a single file off the GUI thread."""
+
+    finished = pyqtSignal(object, object)  # (tracks_dict, source_file)
+
+    def __init__(self, source_file: Path, analyzer: TrackAnalyzer):
+        super().__init__()
+        self._source_file = source_file
+        self._analyzer = analyzer
+
+    def run(self) -> None:
+        try:
+            tracks = self._analyzer.analyze_tracks(self._source_file)
+        except Exception:
+            raise
+
+        self.finished.emit(tracks, self._source_file)
+
+
 class _LoadTracksWorker(QObject):
     progress = pyqtSignal(int, int, str)
     finished = pyqtSignal(list, list, str)
@@ -85,6 +104,9 @@ class FilesTab(QWidget):
         self.on_status: Optional[Callable[[str], None]] = None
         self._load_tracks_busy = False
         self._load_thread: Optional[QThread] = None
+        self._analyze_thread: Optional[QThread] = None
+        self._analyze_worker: Optional[_AnalyzeOneWorker] = None
+        self._set_tracks_btn: Optional[QPushButton] = None
 
         mkvinfo_path = config.get_mkvinfo_path() or "mkvinfo"
         self.track_analyzer = TrackAnalyzer(
@@ -153,7 +175,8 @@ class FilesTab(QWidget):
         root.addLayout(bottom)
 
         batch = QHBoxLayout()
-        batch.addWidget(self._btn("Set tracks…", self._open_set_tracks_dialog))
+        self._set_tracks_btn = self._btn("Set tracks…", self._open_set_tracks_dialog)
+        batch.addWidget(self._set_tracks_btn)
         self.load_tracks_btn = self._btn("Load tracks", self._load_tracks)
         batch.addWidget(self.load_tracks_btn)
         batch.addWidget(self._btn("Mark for re-encode", self._mark_for_reencode))
@@ -513,7 +536,35 @@ class FilesTab(QWidget):
         if not source_file.exists():
             QMessageBox.critical(self, "File not found", str(source_file))
             return
-        tracks = self.track_analyzer.analyze_tracks(source_file)
+
+        # Run analyze_tracks() on a worker thread to avoid blocking the GUI.
+        if self._set_tracks_btn:
+            self._set_tracks_btn.setEnabled(False)
+        if self.on_status:
+            self.on_status(f"Analyzing tracks for {source_file.name}…")
+
+        self._analyze_thread = QThread()
+        worker = _AnalyzeOneWorker(source_file, self.track_analyzer)
+        self._analyze_worker = worker  # Keep a Python reference so the QObject isn't GC'd.
+        worker.moveToThread(self._analyze_thread)
+        self._analyze_thread.started.connect(worker.run)
+        worker.finished.connect(
+            lambda tracks, sf: self._on_analyze_done_set_tracks(tracks, sf, indices)
+        )
+        worker.finished.connect(self._analyze_thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        self._analyze_thread.finished.connect(self._analyze_thread.deleteLater)
+        self._analyze_thread.start()
+
+    def _on_analyze_done_set_tracks(
+        self, tracks: dict, source_file: Path, indices: list
+    ) -> None:
+        self._analyze_worker = None
+        if self._set_tracks_btn:
+            self._set_tracks_btn.setEnabled(True)
+        if self.on_status:
+            self.on_status(f"Ready - {self.file_list.get_file_count()} file(s) in queue")
+
         if tracks.get("error"):
             QMessageBox.critical(self, "Analysis failed", f"Could not read tracks: {tracks['error']}")
             return

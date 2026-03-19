@@ -36,6 +36,10 @@ _PREVIEW_KNOWN_TOKENS = frozenset(
 
 _UNKNOWN_PLACEHOLDER_RE = re.compile(r"(\{[A-Z][A-Z0-9_]*\}|<[A-Z][A-Z0-9_]*>)")
 
+# Characters that require a path to be double-quoted when embedded in a
+# command string that will later be parsed by shlex.split().
+_PATH_QUOTE_CHARS = frozenset(' &^%!')
+
 
 def _escape_gap_with_placeholder_marks(gap_plain: str) -> str:
     """HTML-escape a gap between primary tokens; badge unknown {FOO}/<FOO> placeholders."""
@@ -113,7 +117,6 @@ def generate_command_preview(
     get_files_callback: Optional[Callable],
     get_output_path_callback: Optional[Callable],
     suffix: str,
-    track_analyzer,
 ) -> str:
     if not command_template.strip():
         return "No command entered - load a preset or enter a command to see preview"
@@ -131,15 +134,11 @@ def generate_command_preview(
     output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
     audio_track = first_file_data.get("audio_track")
     subtitle_track = first_file_data.get("subtitle_track")
-    if audio_track is None and track_analyzer:
-        try:
-            tracks = track_analyzer.analyze_tracks(source_file)
-            if not tracks.get("error"):
-                audio_track = tracks.get("audio", 2)
-                subtitle_track = tracks.get("subtitle")
-        except Exception:
-            audio_track = 2
-            subtitle_track = None
+    # Do NOT call analyze_tracks() here — it is a blocking subprocess call that
+    # would freeze the GUI thread on every debounced preview refresh.  If the
+    # file has no cached track data yet, fall back to the default track number
+    # so the preview renders quickly.  Users can run "Load tracks" to populate
+    # real track data, after which the preview will reflect the actual values.
     if audio_track is None:
         audio_track = 2
     subtitle_file = None
@@ -148,7 +147,7 @@ def generate_command_preview(
     command = command_template
 
     def quote_path_if_needed(path_str: str) -> str:
-        if " " in path_str:
+        if any(c in path_str for c in _PATH_QUOTE_CHARS):
             return f'"{path_str}"'
         return path_str
 
@@ -210,7 +209,7 @@ def parse_and_substitute_command(
         return path_str.replace("\\", "\\\\")
 
     def quote_path_if_needed(path_str: str) -> str:
-        if " " in path_str:
+        if any(c in path_str for c in _PATH_QUOTE_CHARS):
             return f'"{path_str}"'
         return path_str
 
@@ -272,8 +271,8 @@ def parse_and_substitute_command(
     try:
         args = shlex.split(command, posix=False)
     except Exception as e:
-        on_log("WARNING", f"shlex.split() failed: {e}, using fallback parsing")
-        args = [arg.strip('"').strip("'") for arg in command.split()]
+        on_log("ERROR", f"Command parsing failed ({e}); cannot build argument list.")
+        return []
 
     for i, arg in enumerate(args):
         if arg == "-i" and i + 1 < len(args):
