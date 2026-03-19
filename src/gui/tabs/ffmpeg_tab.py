@@ -17,7 +17,9 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QDoubleSpinBox,
     QFrame,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -126,6 +128,45 @@ class FFmpegTab(QWidget):
         cmd_l.addLayout(hb)
         root.addWidget(cmd_gb)
 
+        loud_gb = QGroupBox("Audio — loudnorm (preset-generated command)")
+        loud_note = QLabel(
+            "When a HandBrake preset is loaded, toggling these updates the command text "
+            "the same way as Settings → Encoding. Manual edits are overwritten."
+        )
+        loud_note.setWordWrap(True)
+        loud_note.setStyleSheet("color: #888888; font-size: 12px;")
+        loud_l = QVBoxLayout(loud_gb)
+        loud_l.addWidget(loud_note)
+        loud_form = QFormLayout()
+        self.loudnorm_cb = QCheckBox("Apply integrated loudnorm (-af)")
+        self.loudnorm_cb.setChecked(config.get_audio_normalize_enabled())
+        self.loudnorm_cb.toggled.connect(self._on_loudnorm_enabled_changed)
+        loud_form.addRow(self.loudnorm_cb)
+        self.loudnorm_I = QDoubleSpinBox()
+        self.loudnorm_I.setRange(-70.0, -5.0)
+        self.loudnorm_I.setDecimals(1)
+        self.loudnorm_I.setSingleStep(0.5)
+        self.loudnorm_I.setValue(config.get_audio_normalize_loudnorm_I())
+        self.loudnorm_I.valueChanged.connect(self._on_loudnorm_params_changed)
+        loud_form.addRow("Target I (LUFS):", self.loudnorm_I)
+        self.loudnorm_TP = QDoubleSpinBox()
+        self.loudnorm_TP.setRange(-9.0, 0.0)
+        self.loudnorm_TP.setDecimals(1)
+        self.loudnorm_TP.setSingleStep(0.5)
+        self.loudnorm_TP.setValue(config.get_audio_normalize_loudnorm_TP())
+        self.loudnorm_TP.valueChanged.connect(self._on_loudnorm_params_changed)
+        loud_form.addRow("True peak TP (dBTP):", self.loudnorm_TP)
+        self.loudnorm_LRA = QDoubleSpinBox()
+        self.loudnorm_LRA.setRange(1.0, 20.0)
+        self.loudnorm_LRA.setDecimals(1)
+        self.loudnorm_LRA.setSingleStep(0.5)
+        self.loudnorm_LRA.setValue(config.get_audio_normalize_loudnorm_LRA())
+        self.loudnorm_LRA.valueChanged.connect(self._on_loudnorm_params_changed)
+        loud_form.addRow("Loudness range LRA:", self.loudnorm_LRA)
+        loud_l.addLayout(loud_form)
+        self._sync_loudnorm_controls_enabled()
+        root.addWidget(loud_gb)
+
         saved_gb = QGroupBox("Saved command snippets")
         sv = QHBoxLayout(saved_gb)
         sv.addWidget(QLabel("Name:"))
@@ -140,7 +181,9 @@ class FFmpegTab(QWidget):
         preview_l = QVBoxLayout(preview_gb)
         preview_hdr = QHBoxLayout()
         preview_hdr.addWidget(
-            QLabel("Placeholders and example paths are highlighted. Copy uses plain text.")
+            QLabel(
+                "Known placeholders are color-coded; unknown {TOKENS} show in red. Copy uses plain text."
+            )
         )
         preview_hdr.addStretch()
         preview_hdr.addWidget(self._btn("Copy plain text", self._copy_preview_to_clipboard))
@@ -256,6 +299,28 @@ class FFmpegTab(QWidget):
         )
         b.clicked.connect(lambda: self._insert_placeholder(token))
         return b
+
+    def _sync_loudnorm_controls_enabled(self) -> None:
+        enabled = self.loudnorm_cb.isChecked()
+        self.loudnorm_I.setEnabled(enabled)
+        self.loudnorm_TP.setEnabled(enabled)
+        self.loudnorm_LRA.setEnabled(enabled)
+
+    def _on_loudnorm_enabled_changed(self, checked: bool) -> None:
+        config.set_audio_normalize_enabled(checked)
+        self._sync_loudnorm_controls_enabled()
+        self._refresh_preset_command_after_loudnorm()
+
+    def _on_loudnorm_params_changed(self, _value: float = 0.0) -> None:
+        config.set_audio_normalize_loudnorm_I(self.loudnorm_I.value())
+        config.set_audio_normalize_loudnorm_TP(self.loudnorm_TP.value())
+        config.set_audio_normalize_loudnorm_LRA(self.loudnorm_LRA.value())
+        self._refresh_preset_command_after_loudnorm()
+
+    def _refresh_preset_command_after_loudnorm(self) -> None:
+        if self.ffmpeg_translator:
+            self._update_command_preview()
+        self._schedule_preview_update()
 
     def _audio_filter_from_settings(self) -> Optional[str]:
         if not config.get_audio_normalize_enabled():

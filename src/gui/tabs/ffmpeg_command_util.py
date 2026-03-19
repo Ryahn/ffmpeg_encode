@@ -19,6 +19,46 @@ _FFMPEG_PREVIEW_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PREVIEW_KNOWN_TOKENS = frozenset(
+    {
+        "{SUBTITLE_FILE}",
+        "{SUBTITLE_TRACK}",
+        "{AUDIO_TRACK}",
+        "{INPUT}",
+        "{OUTPUT}",
+        "<SUBTITLE_FILE>",
+        "<SUBTITLE_TRACK>",
+        "<AUDIO_TRACK>",
+        "<INPUT>",
+        "<OUTPUT>",
+    }
+)
+
+_UNKNOWN_PLACEHOLDER_RE = re.compile(r"(\{[A-Z][A-Z0-9_]*\}|<[A-Z][A-Z0-9_]*>)")
+
+
+def _escape_gap_with_placeholder_marks(gap_plain: str) -> str:
+    """HTML-escape a gap between primary tokens; badge unknown {FOO}/<FOO> placeholders."""
+    if not gap_plain:
+        return ""
+    parts: List[str] = []
+    last = 0
+    for match in _UNKNOWN_PLACEHOLDER_RE.finditer(gap_plain):
+        parts.append(html.escape(gap_plain[last : match.start()]))
+        tok = match.group(1)
+        if tok in _PREVIEW_KNOWN_TOKENS:
+            parts.append(_ffmpeg_preview_token_span(tok))
+        else:
+            esc = html.escape(tok)
+            parts.append(
+                f'<span style="background-color:#5c2a2a;color:#ff9d9d;padding:1px 5px;'
+                f'border-radius:3px;font-weight:600;" title="Unknown placeholder — check spelling">'
+                f"{esc}</span>"
+            )
+        last = match.end()
+    parts.append(html.escape(gap_plain[last:]))
+    return "".join(parts)
+
 
 def _ffmpeg_preview_token_span(token: str) -> str:
     low = token.lower()
@@ -56,10 +96,10 @@ def ffmpeg_preview_to_html(plain_preview: str) -> str:
     chunks: List[str] = []
     pos = 0
     for match in _FFMPEG_PREVIEW_TOKEN_RE.finditer(plain_preview):
-        chunks.append(html.escape(plain_preview[pos : match.start()]))
+        chunks.append(_escape_gap_with_placeholder_marks(plain_preview[pos : match.start()]))
         chunks.append(_ffmpeg_preview_token_span(match.group(1)))
         pos = match.end()
-    chunks.append(html.escape(plain_preview[pos:]))
+    chunks.append(_escape_gap_with_placeholder_marks(plain_preview[pos:]))
     body = "".join(chunks)
     return (
         '<div style="color:#c0c0c0;font-family:Consolas,Courier New,monospace;'
