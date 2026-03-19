@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 import shlex
 import tempfile
@@ -10,6 +11,61 @@ from typing import Callable, List, Optional
 
 from core.ffmpeg_translator import _escape_ffmpeg_filter_path
 from utils.config import config
+
+_FFMPEG_PREVIEW_TOKEN_RE = re.compile(
+    r"(\{SUBTITLE_FILE\}|\{SUBTITLE_TRACK\}|\{AUDIO_TRACK\}|\{INPUT\}|\{OUTPUT\}|"
+    r"<SUBTITLE_FILE>|<SUBTITLE_TRACK>|<AUDIO_TRACK>|<INPUT>|<OUTPUT>|"
+    r"\binput\.mkv\b|\boutput\.mp4\b)",
+    re.IGNORECASE,
+)
+
+
+def _ffmpeg_preview_token_span(token: str) -> str:
+    low = token.lower()
+    if low == "input.mkv" or token in ("{INPUT}", "<INPUT>"):
+        bg, fg = "#1e3a52", "#7dd3fc"
+    elif low == "output.mp4" or token in ("{OUTPUT}", "<OUTPUT>"):
+        bg, fg = "#1a3d2e", "#4ade80"
+    elif token in ("{AUDIO_TRACK}", "<AUDIO_TRACK>"):
+        bg, fg = "#3d3020", "#f0a500"
+    elif token in ("{SUBTITLE_TRACK}", "<SUBTITLE_TRACK>"):
+        bg, fg = "#2d2640", "#c4b5fd"
+    elif token in ("{SUBTITLE_FILE}", "<SUBTITLE_FILE>"):
+        bg, fg = "#3d1f40", "#f9a8d4"
+    else:
+        bg, fg = "#38393f", "#c0c0c0"
+    esc = html.escape(token)
+    return (
+        f'<span style="background-color:{bg};color:{fg};padding:1px 5px;'
+        f'border-radius:3px;font-weight:600;">{esc}</span>'
+    )
+
+
+def ffmpeg_preview_to_html(plain_preview: str) -> str:
+    """
+    HTML for QTextEdit: same text as the plain preview, with colored inline
+    badges for dynamic placeholders and example input.mkv / output.mp4 paths.
+    """
+    if plain_preview.startswith(("No command", "No files", "Error generating")):
+        inner = html.escape(plain_preview)
+        return (
+            '<div style="color:#9ca3af;font-family:Consolas,Courier New,monospace;'
+            'font-size:12px;white-space:pre-wrap;word-wrap:break-word;">'
+            f"{inner}</div>"
+        )
+    chunks: List[str] = []
+    pos = 0
+    for match in _FFMPEG_PREVIEW_TOKEN_RE.finditer(plain_preview):
+        chunks.append(html.escape(plain_preview[pos : match.start()]))
+        chunks.append(_ffmpeg_preview_token_span(match.group(1)))
+        pos = match.end()
+    chunks.append(html.escape(plain_preview[pos:]))
+    body = "".join(chunks)
+    return (
+        '<div style="color:#c0c0c0;font-family:Consolas,Courier New,monospace;'
+        'font-size:12px;white-space:pre-wrap;word-wrap:break-word;">'
+        f"{body}</div>"
+    )
 
 
 def generate_command_preview(

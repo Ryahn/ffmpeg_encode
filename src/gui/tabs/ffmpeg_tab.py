@@ -1,4 +1,8 @@
-"""FFmpeg encoding tab (PyQt6)."""
+"""FFmpeg encoding tab (PyQt6).
+
+The encoder core supports **Stop** (terminate current process); there is no
+mid-encode pause/resume API in ``core.encoder`` to wire here.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +11,14 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -23,11 +28,16 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from .ffmpeg_command_util import generate_command_preview, parse_and_substitute_command
+from .ffmpeg_command_util import (
+    ffmpeg_preview_to_html,
+    generate_command_preview,
+    parse_and_substitute_command,
+)
 from ..widgets.log_viewer import LogViewer
 from ..widgets.progress_bar import ProgressDisplay
 from core.audio_normalize import build_integrated_loudnorm_filter
@@ -51,6 +61,14 @@ class _FFmpegUiBridge(QObject):
 
 
 class FFmpegTab(QWidget):
+    _PLACEHOLDER_CHIP_STYLES = {
+        "{INPUT}": ("#1e3a52", "#7dd3fc", "#2a4a6a"),
+        "{OUTPUT}": ("#1a3d2e", "#4ade80", "#255238"),
+        "{AUDIO_TRACK}": ("#3d3020", "#f0a500", "#524018"),
+        "{SUBTITLE_TRACK}": ("#2d2640", "#c4b5fd", "#3d3558"),
+        "{SUBTITLE_FILE}": ("#3d1f40", "#f9a8d4", "#522840"),
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_window = None
@@ -68,6 +86,7 @@ class FFmpegTab(QWidget):
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._update_command_preview_display)
+        self._last_preview_plain = ""
 
         self._bridge = _FFmpegUiBridge(self)
 
@@ -78,22 +97,23 @@ class FFmpegTab(QWidget):
         scroll.setWidget(inner)
         root = QVBoxLayout(inner)
 
-        pr = QHBoxLayout()
-        pr.addWidget(QLabel("HandBrake Preset:"))
+        preset_gb = QGroupBox("HandBrake preset")
+        pr = QHBoxLayout(preset_gb)
+        pr.addWidget(QLabel("Saved preset:"))
         self.preset_combo = QComboBox()
         self.preset_combo.setMinimumWidth(280)
         self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
         pr.addWidget(self.preset_combo)
         pr.addWidget(self._btn("Load Preset", self._load_preset))
         pr.addWidget(self._btn("Detect Tracks", self._detect_and_update_tracks))
-        root.addLayout(pr)
+        root.addWidget(preset_gb)
 
-        root.addWidget(QLabel("<b>FFmpeg Command</b> (editable)"))
+        cmd_gb = QGroupBox("FFmpeg command (editable)")
+        cmd_l = QVBoxLayout(cmd_gb)
         self.cmd_text = QPlainTextEdit()
         self.cmd_text.setMinimumHeight(90)
         self.cmd_text.textChanged.connect(self._schedule_preview_update)
-        root.addWidget(self.cmd_text)
-
+        cmd_l.addWidget(self.cmd_text)
         hb = QHBoxLayout()
         for t, fn in [
             ("Save", self._save_command),
@@ -103,28 +123,51 @@ class FFmpegTab(QWidget):
             ("Reset", self._reset_command),
         ]:
             hb.addWidget(self._btn(t, fn))
-        root.addLayout(hb)
+        cmd_l.addLayout(hb)
+        root.addWidget(cmd_gb)
 
-        sv = QHBoxLayout()
-        sv.addWidget(QLabel("Saved Commands:"))
+        saved_gb = QGroupBox("Saved command snippets")
+        sv = QHBoxLayout(saved_gb)
+        sv.addWidget(QLabel("Name:"))
         self.saved_cmd_combo = QComboBox()
         self.saved_cmd_combo.setMinimumWidth(260)
         self.saved_cmd_combo.currentTextChanged.connect(self._on_saved_command_selected)
         sv.addWidget(self.saved_cmd_combo)
         sv.addWidget(self._btn("Delete", self._delete_saved_command))
-        root.addLayout(sv)
+        root.addWidget(saved_gb)
 
-        root.addWidget(QLabel("<b>Command Preview</b> (read-only)"))
-        self.preview_text = QPlainTextEdit()
+        preview_gb = QGroupBox("Resolved preview (first queued file)")
+        preview_l = QVBoxLayout(preview_gb)
+        preview_hdr = QHBoxLayout()
+        preview_hdr.addWidget(
+            QLabel("Placeholders and example paths are highlighted. Copy uses plain text.")
+        )
+        preview_hdr.addStretch()
+        preview_hdr.addWidget(self._btn("Copy plain text", self._copy_preview_to_clipboard))
+        preview_l.addLayout(preview_hdr)
+        self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
-        self.preview_text.setMinimumHeight(90)
-        root.addWidget(self.preview_text)
-        ph = QHBoxLayout()
-        ph.addWidget(QLabel("Insert:"))
-        for p in ["{INPUT}", "{OUTPUT}", "{AUDIO_TRACK}", "{SUBTITLE_TRACK}", "{SUBTITLE_FILE}"]:
-            ph.addWidget(self._btn(p, lambda x=p: self._insert_placeholder(x)))
-        root.addLayout(ph)
+        self.preview_text.setMinimumHeight(100)
+        self.preview_text.setAcceptRichText(True)
+        preview_l.addWidget(self.preview_text)
+        root.addWidget(preview_gb)
 
+        ph_gb = QGroupBox("Insert placeholders")
+        ph = QHBoxLayout(ph_gb)
+        ph.addWidget(QLabel("Click to insert at cursor:"))
+        for token in [
+            "{INPUT}",
+            "{OUTPUT}",
+            "{AUDIO_TRACK}",
+            "{SUBTITLE_TRACK}",
+            "{SUBTITLE_FILE}",
+        ]:
+            ph.addWidget(self._placeholder_chip(token))
+        ph.addStretch()
+        root.addWidget(ph_gb)
+
+        enc_gb = QGroupBox("Encoding")
+        enc_l = QVBoxLayout(enc_gb)
         opt = QHBoxLayout()
         self.dry_run_cb = QCheckBox("Dry Run")
         self.skip_cb = QCheckBox("Skip Existing")
@@ -154,10 +197,10 @@ class FFmpegTab(QWidget):
         self.stop_btn = self._btn("Stop", self._stop_encoding)
         self.stop_btn.setEnabled(False)
         opt.addWidget(self.stop_btn)
-        root.addLayout(opt)
-
+        enc_l.addLayout(opt)
         self.progress_display = ProgressDisplay()
-        root.addWidget(self.progress_display)
+        enc_l.addWidget(self.progress_display)
+        root.addWidget(enc_gb)
 
         outer.addWidget(scroll)
 
@@ -186,6 +229,32 @@ class FFmpegTab(QWidget):
     def _btn(self, text, slot):
         b = QPushButton(text)
         b.clicked.connect(slot)
+        return b
+
+    def _placeholder_chip(self, token: str) -> QPushButton:
+        b = QPushButton(token)
+        bg, fg, hover = self._PLACEHOLDER_CHIP_STYLES[token]
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {bg};
+                color: {fg};
+                border: 1px solid {fg};
+                border-radius: 5px;
+                padding: 4px 8px;
+                font-weight: 600;
+                font-family: Consolas, "Courier New", monospace;
+            }}
+            QPushButton:hover {{
+                background-color: {hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {hover};
+            }}
+            """
+        )
+        b.clicked.connect(lambda: self._insert_placeholder(token))
         return b
 
     def _audio_filter_from_settings(self) -> Optional[str]:
@@ -374,15 +443,22 @@ class FFmpegTab(QWidget):
 
     def _update_command_preview_display(self) -> None:
         try:
-            self.preview_text.setPlainText(self._generate_command_preview())
+            plain = self._generate_command_preview()
         except Exception as e:
-            self.preview_text.setPlainText(f"Error generating preview: {e}")
+            plain = f"Error generating preview: {e}"
+        self._last_preview_plain = plain
+        try:
+            self.preview_text.setHtml(ffmpeg_preview_to_html(plain))
+        except Exception:
+            self.preview_text.setPlainText(plain)
 
     def _copy_preview_to_clipboard(self) -> None:
-        t = self.preview_text.toPlainText()
+        t = (self._last_preview_plain or "").strip()
         if t and not t.startswith("No command") and not t.startswith("No files"):
             QGuiApplication.clipboard().setText(t)
-            QMessageBox.information(self, "Copied", "Preview copied to clipboard")
+            self._show_toast("Preview copied (plain text).", "success")
+        else:
+            self._show_toast("Nothing useful to copy yet.", "warning")
 
     def _save_command(self) -> None:
         cmd = self.cmd_text.toPlainText().strip()
