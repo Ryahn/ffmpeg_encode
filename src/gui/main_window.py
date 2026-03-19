@@ -126,6 +126,8 @@ class MainWindow(QMainWindow):
     def _on_files_changed(self) -> None:
         files = self.files_tab.get_files()
         self._update_status(f"{len(files)} file(s) ready")
+        if hasattr(self.handbrake_tab, "on_files_changed"):
+            self.handbrake_tab.on_files_changed()
         if hasattr(self.ffmpeg_tab, "on_files_changed"):
             self.ffmpeg_tab.on_files_changed()
 

@@ -2,6 +2,7 @@
 
 import logging
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -32,6 +33,15 @@ except ImportError:
 def _windows_taskkill_path() -> str:
     exe = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
     return str(exe) if exe.is_file() else "taskkill"
+
+
+def format_cli_argv(argv: List[str]) -> str:
+    """Format argument list for display (Windows uses cmd-style quoting)."""
+    if not argv:
+        return ""
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(argv)
+    return shlex.join(argv)
 
 
 class EncodingProgress:
@@ -65,7 +75,30 @@ class Encoder:
         self._process_lock = threading.Lock()  # Thread-safe access to process
         self._stdout_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
-    
+
+    def build_handbrake_argv(
+        self,
+        input_file: Path,
+        output_file: Path,
+        preset_file: Path,
+        preset_name: str,
+        audio_track: int,
+        subtitle_track: Optional[int] = None,
+    ) -> List[str]:
+        """Argument vector for HandBrakeCLI (same order as ``encode_with_handbrake``)."""
+        args = [
+            self.handbrake_path,
+            "--preset-import-file", str(preset_file),
+            "--preset", preset_name,
+            "--input", str(input_file),
+            "--output", str(output_file),
+            "--audio", str(audio_track),
+        ]
+        if subtitle_track is not None:
+            args.extend(["--subtitle", str(subtitle_track + 1)])
+            args.append("--subtitle-burned")
+        return args
+
     def encode_with_handbrake(
         self,
         input_file: Path,
@@ -80,21 +113,15 @@ class Encoder:
         if dry_run:
             self._log("INFO", f"DRY RUN: Would encode {input_file} to {output_file}")
             return True
-        
-        args = [
-            self.handbrake_path,
-            "--preset-import-file", str(preset_file),
-            "--preset", preset_name,
-            "--input", str(input_file),
-            "--output", str(output_file),
-            "--audio", str(audio_track)
-        ]
-        
-        if subtitle_track is not None:
-            # HandBrake CLI uses 1-based track numbers
-            args.extend(["--subtitle", str(subtitle_track + 1)])
-            args.append("--subtitle-burned")
-        
+
+        args = self.build_handbrake_argv(
+            input_file=input_file,
+            output_file=output_file,
+            preset_file=preset_file,
+            preset_name=preset_name,
+            audio_track=audio_track,
+            subtitle_track=subtitle_track,
+        )
         return self._run_encoder(args, "HandBrake", output_file)
     
     def encode_with_ffmpeg(
