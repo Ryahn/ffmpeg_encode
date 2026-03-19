@@ -173,6 +173,36 @@ class FilesTab(QWidget):
         self._update_output_path_visibility()
         self._update_preview()
 
+    def reload_from_config(self) -> None:
+        """Refresh paths and strip count from disk config (e.g. after editing Settings)."""
+        mkvinfo_path = config.get_mkvinfo_path() or "mkvinfo"
+        self.track_analyzer = TrackAnalyzer(
+            mkvinfo_path=mkvinfo_path if mkvinfo_path != "mkvinfo" else None
+        )
+        self.strip_entry.blockSignals(True)
+        self.strip_entry.setText(str(config.get_strip_leading_path_segments()))
+        self.strip_entry.blockSignals(False)
+        last_scan = config.get_last_scan_folder()
+        if last_scan and Path(last_scan).exists():
+            self.scan_folder = Path(last_scan)
+            self.scan_folder_label.setText(str(self.scan_folder))
+        else:
+            self.scan_folder = None
+            self.scan_folder_label.setText("Not selected")
+        if config.get_output_destination() == "custom_folder":
+            self._radio_custom.setChecked(True)
+        else:
+            self._radio_input.setChecked(True)
+        of = config.get_default_output_folder()
+        if of and Path(of).exists():
+            self.output_folder = Path(of)
+            self.output_folder_label.setText(str(self.output_folder))
+        else:
+            self.output_folder = None
+            self.output_folder_label.setText("Not selected")
+        self._update_output_path_visibility()
+        self._update_preview()
+
     def _btn(self, text: str, slot) -> QPushButton:
         b = QPushButton(text)
         b.clicked.connect(slot)

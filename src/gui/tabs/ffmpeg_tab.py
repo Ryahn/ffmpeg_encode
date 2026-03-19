@@ -322,6 +322,25 @@ class FFmpegTab(QWidget):
             self._update_command_preview()
         self._schedule_preview_update()
 
+    def apply_audio_normalize_settings_from_config(self) -> None:
+        """Sync loudnorm widgets when config was changed elsewhere (e.g. Settings tab)."""
+        self.loudnorm_cb.blockSignals(True)
+        self.loudnorm_I.blockSignals(True)
+        self.loudnorm_TP.blockSignals(True)
+        self.loudnorm_LRA.blockSignals(True)
+        try:
+            self.loudnorm_cb.setChecked(config.get_audio_normalize_enabled())
+            self.loudnorm_I.setValue(config.get_audio_normalize_loudnorm_I())
+            self.loudnorm_TP.setValue(config.get_audio_normalize_loudnorm_TP())
+            self.loudnorm_LRA.setValue(config.get_audio_normalize_loudnorm_LRA())
+        finally:
+            self.loudnorm_cb.blockSignals(False)
+            self.loudnorm_I.blockSignals(False)
+            self.loudnorm_TP.blockSignals(False)
+            self.loudnorm_LRA.blockSignals(False)
+        self._sync_loudnorm_controls_enabled()
+        self._schedule_preview_update()
+
     def _audio_filter_from_settings(self) -> Optional[str]:
         if not config.get_audio_normalize_enabled():
             return None

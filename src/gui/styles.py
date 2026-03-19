@@ -123,8 +123,22 @@ def get_stylesheet() -> str:
         spacing: 8px;
     }}
     QCheckBox::indicator {{
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
+        border-radius: 3px;
+        border: 2px solid {T.APP_TEXT_DIM};
+        background-color: {T.APP_BG_SUNKEN};
+    }}
+    QCheckBox::indicator:hover {{
+        border: 2px solid {T.APP_BLUE_LIGHT};
+    }}
+    QCheckBox::indicator:checked {{
+        border: 2px solid {T.APP_BLUE_LIGHT};
+        background-color: {T.APP_BLUE};
+    }}
+    QCheckBox::indicator:disabled {{
+        border: 2px solid {T.APP_BUTTON_DISABLED_BG};
+        background-color: {T.APP_BG_RAISED};
     }}
     QRadioButton {{
         color: {T.APP_TEXT};

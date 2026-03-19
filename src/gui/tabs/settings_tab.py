@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any, List
 
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -17,9 +20,9 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
-    QButtonGroup,
 )
 
 from core.package_manager import PackageManager
@@ -27,6 +30,8 @@ from utils.config import config
 
 
 class SettingsTab(QWidget):
+    main_window: Any = None
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.package_manager = PackageManager()
@@ -39,6 +44,7 @@ class SettingsTab(QWidget):
 
         root.addWidget(self._paths_group())
         root.addWidget(self._output_group())
+        root.addWidget(self._files_defaults_group())
         root.addWidget(self._encoding_group())
         root.addWidget(self._track_group())
         root.addStretch()
@@ -156,6 +162,76 @@ class SettingsTab(QWidget):
         f.addRow("Default output suffix:", self.suffix_entry)
         return g
 
+    def _files_defaults_group(self) -> QGroupBox:
+        g = QGroupBox("Files tab defaults")
+        note = QLabel(
+            "Strip count and default output folder are shared with the Files tab "
+            "(switch to Files to refresh the view after changes here)."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #888888; font-size: 12px;")
+        outer = QVBoxLayout(g)
+        outer.addWidget(note)
+        form = QFormLayout()
+        self.strip_spin = QSpinBox()
+        self.strip_spin.setRange(0, 99)
+        self.strip_spin.setValue(config.get_strip_leading_path_segments())
+        self.strip_spin.valueChanged.connect(lambda v: config.set_strip_leading_path_segments(int(v)))
+        form.addRow("Strip leading path segments:", self.strip_spin)
+
+        dest = QWidget()
+        dv = QVBoxLayout(dest)
+        dv.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        self._files_dest_grp = QButtonGroup(self)
+        self._files_radio_input = QRadioButton("Save next to input file (default)")
+        self._files_radio_custom = QRadioButton("Default custom output folder")
+        self._files_dest_grp.addButton(self._files_radio_input)
+        self._files_dest_grp.addButton(self._files_radio_custom)
+        if config.get_output_destination() == "custom_folder":
+            self._files_radio_custom.setChecked(True)
+        else:
+            self._files_radio_input.setChecked(True)
+        self._files_radio_input.toggled.connect(self._on_files_default_dest_toggled)
+        self._files_radio_custom.toggled.connect(self._on_files_default_dest_toggled)
+        row.addWidget(self._files_radio_input)
+        row.addWidget(self._files_radio_custom)
+        dv.addLayout(row)
+        fold_row = QHBoxLayout()
+        self.default_output_folder_entry = QLineEdit(config.get_default_output_folder())
+        self.default_output_folder_entry.editingFinished.connect(
+            lambda: config.set_default_output_folder(self.default_output_folder_entry.text().strip())
+        )
+        fold_row.addWidget(self.default_output_folder_entry, stretch=1)
+        self._browse_default_out_btn = self._btn("Browse…", self._browse_default_output_folder)
+        fold_row.addWidget(self._browse_default_out_btn)
+        dv.addLayout(fold_row)
+        form.addRow("Output destination:", dest)
+        outer.addLayout(form)
+        self._sync_default_output_folder_widgets()
+        return g
+
+    def _on_files_default_dest_toggled(self) -> None:
+        if self._files_radio_custom.isChecked():
+            config.set_output_destination("custom_folder")
+        else:
+            config.set_output_destination("input_folder")
+        self._sync_default_output_folder_widgets()
+
+    def _sync_default_output_folder_widgets(self) -> None:
+        custom = self._files_radio_custom.isChecked()
+        self.default_output_folder_entry.setEnabled(custom)
+        self._browse_default_out_btn.setEnabled(custom)
+
+    def _browse_default_output_folder(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Select default output folder")
+        if d:
+            self._files_radio_custom.setChecked(True)
+            self.default_output_folder_entry.setText(d)
+            config.set_output_destination("custom_folder")
+            config.set_default_output_folder(d)
+            self._sync_default_output_folder_widgets()
+
     def _encoding_group(self) -> QGroupBox:
         g = QGroupBox("Encoding")
         v = QVBoxLayout(g)
@@ -184,12 +260,92 @@ class SettingsTab(QWidget):
         v.addWidget(self.debug_cb)
         self.norm_cb = QCheckBox("Apply loudness normalization (FFmpeg single-pass loudnorm)")
         self.norm_cb.setChecked(config.get_audio_normalize_enabled())
-        self.norm_cb.toggled.connect(lambda x: config.set_audio_normalize_enabled(x))
+        self.norm_cb.toggled.connect(self._on_norm_enabled_changed)
         v.addWidget(self.norm_cb)
+        loud_form = QFormLayout()
+        self.loudnorm_I = QDoubleSpinBox()
+        self.loudnorm_I.setRange(-70.0, -5.0)
+        self.loudnorm_I.setDecimals(1)
+        self.loudnorm_I.setSingleStep(0.5)
+        self.loudnorm_I.setValue(config.get_audio_normalize_loudnorm_I())
+        self.loudnorm_I.valueChanged.connect(self._on_loudnorm_value_changed)
+        loud_form.addRow("Loudnorm target I (LUFS):", self.loudnorm_I)
+        self.loudnorm_TP = QDoubleSpinBox()
+        self.loudnorm_TP.setRange(-9.0, 0.0)
+        self.loudnorm_TP.setDecimals(1)
+        self.loudnorm_TP.setSingleStep(0.5)
+        self.loudnorm_TP.setValue(config.get_audio_normalize_loudnorm_TP())
+        self.loudnorm_TP.valueChanged.connect(self._on_loudnorm_value_changed)
+        loud_form.addRow("Loudnorm true peak TP (dBTP):", self.loudnorm_TP)
+        self.loudnorm_LRA = QDoubleSpinBox()
+        self.loudnorm_LRA.setRange(1.0, 20.0)
+        self.loudnorm_LRA.setDecimals(1)
+        self.loudnorm_LRA.setSingleStep(0.5)
+        self.loudnorm_LRA.setValue(config.get_audio_normalize_loudnorm_LRA())
+        self.loudnorm_LRA.valueChanged.connect(self._on_loudnorm_value_changed)
+        loud_form.addRow("Loudnorm loudness range LRA:", self.loudnorm_LRA)
+        v.addLayout(loud_form)
+        self._sync_loudnorm_spin_enabled()
         return g
+
+    def _on_norm_enabled_changed(self, checked: bool) -> None:
+        config.set_audio_normalize_enabled(checked)
+        self._sync_loudnorm_spin_enabled()
+
+    def _on_loudnorm_value_changed(self, _v: float) -> None:
+        config.set_audio_normalize_loudnorm_I(self.loudnorm_I.value())
+        config.set_audio_normalize_loudnorm_TP(self.loudnorm_TP.value())
+        config.set_audio_normalize_loudnorm_LRA(self.loudnorm_LRA.value())
+
+    def _sync_loudnorm_spin_enabled(self) -> None:
+        enabled = self.norm_cb.isChecked()
+        self.loudnorm_I.setEnabled(enabled)
+        self.loudnorm_TP.setEnabled(enabled)
+        self.loudnorm_LRA.setEnabled(enabled)
 
     def _persist_mode(self) -> None:
         config.set_encoding_mode("parallel" if self._m_par.isChecked() else "sequential")
+
+    def reload_from_config(self) -> None:
+        """Refresh widgets from config (when user opens this tab)."""
+        self.strip_spin.blockSignals(True)
+        self.strip_spin.setValue(config.get_strip_leading_path_segments())
+        self.strip_spin.blockSignals(False)
+        if config.get_output_destination() == "custom_folder":
+            self._files_radio_custom.setChecked(True)
+        else:
+            self._files_radio_input.setChecked(True)
+        self.default_output_folder_entry.blockSignals(True)
+        self.default_output_folder_entry.setText(config.get_default_output_folder())
+        self.default_output_folder_entry.blockSignals(False)
+        self._sync_default_output_folder_widgets()
+        self.loudnorm_I.blockSignals(True)
+        self.loudnorm_TP.blockSignals(True)
+        self.loudnorm_LRA.blockSignals(True)
+        self.loudnorm_I.setValue(config.get_audio_normalize_loudnorm_I())
+        self.loudnorm_TP.setValue(config.get_audio_normalize_loudnorm_TP())
+        self.loudnorm_LRA.setValue(config.get_audio_normalize_loudnorm_LRA())
+        self.loudnorm_I.blockSignals(False)
+        self.loudnorm_TP.blockSignals(False)
+        self.loudnorm_LRA.blockSignals(False)
+        self.norm_cb.setChecked(config.get_audio_normalize_enabled())
+        self._sync_loudnorm_spin_enabled()
+
+    def _executable_path_warnings(self) -> List[str]:
+        issues: List[str] = []
+        checks = [
+            ("FFmpeg", self.ffmpeg_entry.text().strip()),
+            ("HandBrake CLI", self.handbrake_entry.text().strip()),
+            ("mkvinfo", self.mkvinfo_entry.text().strip()),
+            ("MediaInfo", self.mediainfo_entry.text().strip()),
+        ]
+        for label, path in checks:
+            if not path:
+                continue
+            p = Path(path)
+            if not p.is_file():
+                issues.append(f"{label}: not a file or not found:\n{path}")
+        return issues
 
     def _track_group(self) -> QGroupBox:
         g = QGroupBox("Track detection")
@@ -243,10 +399,32 @@ class SettingsTab(QWidget):
             config.set_mkvinfo_path(self.mkvinfo_entry.text().strip())
             config.set_mediainfo_path(self.mediainfo_entry.text().strip())
             config.set_default_output_suffix(self.suffix_entry.text())
+            config.set_strip_leading_path_segments(self.strip_spin.value())
+            config.set_default_output_folder(self.default_output_folder_entry.text().strip())
             config.set_encoding_mode("parallel" if self._m_par.isChecked() else "sequential")
             config.set_skip_existing(self.skip_cb.isChecked())
             config.set_debug_logging(self.debug_cb.isChecked())
             config.set_audio_normalize_enabled(self.norm_cb.isChecked())
-            QMessageBox.information(self, "Saved", "All settings saved.")
+            config.set_audio_normalize_loudnorm_I(self.loudnorm_I.value())
+            config.set_audio_normalize_loudnorm_TP(self.loudnorm_TP.value())
+            config.set_audio_normalize_loudnorm_LRA(self.loudnorm_LRA.value())
+            mw = self.main_window
+            if mw is not None and hasattr(mw, "refresh_encoder_clients"):
+                mw.refresh_encoder_clients()
+            if mw is not None and hasattr(mw, "ffmpeg_tab"):
+                ft = mw.ffmpeg_tab
+                ft.apply_audio_normalize_settings_from_config()
+                ft._refresh_preset_command_after_loudnorm()
+            warnings = self._executable_path_warnings()
+            if warnings:
+                QMessageBox.warning(
+                    self,
+                    "Saved — check paths",
+                    "Settings were saved.\n\n"
+                    + "\n\n".join(warnings)
+                    + "\n\nEmpty paths are OK if the tool is on PATH.",
+                )
+            else:
+                QMessageBox.information(self, "Saved", "All settings saved.")
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))

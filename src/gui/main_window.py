@@ -79,6 +79,12 @@ class MainWindow(QMainWindow):
         self.about_tab = AboutTab()
         self.tab_widget.addTab(self.about_tab, "About")
 
+        self._tab_index_files = self.tab_widget.indexOf(self.files_tab)
+        self._tab_index_settings = self.tab_widget.indexOf(self.settings_tab)
+        self._tab_index_ffmpeg = self.tab_widget.indexOf(self.ffmpeg_tab)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        self.settings_tab.main_window = self
+
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._update_status()
@@ -137,6 +143,24 @@ class MainWindow(QMainWindow):
         else:
             n = len(self.files_tab.get_files())
             self._status.showMessage(f"Ready - {n} file(s) in queue")
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == self._tab_index_files:
+            self.files_tab.reload_from_config()
+        elif index == self._tab_index_settings:
+            self.settings_tab.reload_from_config()
+        elif index == self._tab_index_ffmpeg:
+            self.ffmpeg_tab.apply_audio_normalize_settings_from_config()
+
+    def refresh_encoder_clients(self) -> None:
+        """Recreate encoders/analyzers after tool paths change in Settings."""
+        try:
+            if hasattr(self.handbrake_tab, "_init_encoder"):
+                self.handbrake_tab._init_encoder()
+            if hasattr(self.ffmpeg_tab, "_init_encoder"):
+                self.ffmpeg_tab._init_encoder()
+        except Exception as e:
+            logger.warning(f"Could not refresh encoder clients: {e}")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         try:
