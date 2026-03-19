@@ -7,6 +7,7 @@ mid-encode pause/resume API in ``core.encoder`` to wire here.
 from __future__ import annotations
 
 import threading
+import re
 import time
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -131,7 +132,7 @@ class FFmpegTab(QWidget):
         loud_gb = QGroupBox("Audio — loudnorm (preset-generated command)")
         loud_note = QLabel(
             "When a HandBrake preset is loaded, toggling these updates the command text "
-            "the same way as Settings → Encoding. Manual edits are overwritten."
+            "the same way as Settings → Encoding."
         )
         loud_note.setWordWrap(True)
         loud_note.setStyleSheet("color: #888888; font-size: 12px;")
@@ -269,6 +270,10 @@ class FFmpegTab(QWidget):
         self._load_last_preset()
         self._update_command_preview_display()
 
+    _AF_OPTION_RE = re.compile(
+        r"(?P<prefix>\s)-af\s+(?P<val>'[^']*'|\"[^\"]*\"|\S+)"
+    )
+
     def _btn(self, text, slot):
         b = QPushButton(text)
         b.clicked.connect(slot)
@@ -318,8 +323,7 @@ class FFmpegTab(QWidget):
         self._refresh_preset_command_after_loudnorm()
 
     def _refresh_preset_command_after_loudnorm(self) -> None:
-        if self.ffmpeg_translator:
-            self._update_command_preview()
+        self._apply_loudnorm_to_current_cmd_text()
         self._schedule_preview_update()
 
     def apply_audio_normalize_settings_from_config(self) -> None:
@@ -340,6 +344,84 @@ class FFmpegTab(QWidget):
             self.loudnorm_LRA.blockSignals(False)
         self._sync_loudnorm_controls_enabled()
         self._schedule_preview_update()
+
+    def _strip_af_value_quotes(self, af_value: str) -> tuple[str, str]:
+        """Return (unquoted_value, quote_char) where quote_char is '' or one of \"'\" / '\"'."""
+        if len(af_value) >= 2 and af_value[0] == af_value[-1] and af_value[0] in ("'", '"'):
+            return af_value[1:-1], af_value[0]
+        return af_value, ""
+
+    def _quote_af_value(self, af_value_unquoted: str, quote_char: str) -> str:
+        if quote_char:
+            return f"{quote_char}{af_value_unquoted}{quote_char}"
+        return af_value_unquoted
+
+    def _apply_loudnorm_to_current_cmd_text(self) -> None:
+        """
+        Update only the -af option in the current command template.
+
+        This preserves manual video encoding edits (e.g. NVENC encoder selection)
+        while still letting the loudnorm toggle affect audio loudness.
+        """
+        filter_expr = self._audio_filter_from_settings()
+        cmd = self.cmd_text.toPlainText()
+        if not cmd.strip():
+            return
+
+        def repl_enable(match: re.Match) -> str:
+            prefix = match.group("prefix")
+            existing_raw = match.group("val")
+            existing, quote_char = self._strip_af_value_quotes(existing_raw)
+
+            if existing.strip().startswith("loudnorm="):
+                new_val = self._quote_af_value(filter_expr or "", quote_char)
+            else:
+                # If user already has some audio filters, append loudnorm.
+                existing_parts = [p.strip() for p in existing.split(",") if p.strip()]
+                if existing_parts:
+                    existing_parts.append(filter_expr or "")
+                    new_val = self._quote_af_value(",".join(existing_parts), quote_char)
+                else:
+                    new_val = self._quote_af_value(filter_expr or "", quote_char)
+
+            return f"{prefix}-af {new_val}"
+
+        def repl_disable(match: re.Match) -> str:
+            prefix = match.group("prefix")
+            existing_raw = match.group("val")
+            existing, quote_char = self._strip_af_value_quotes(existing_raw)
+
+            parts = [p.strip() for p in existing.split(",") if p.strip()]
+            kept = [p for p in parts if not p.startswith("loudnorm=")]
+            if not kept:
+                return ""  # remove whole -af option
+            return f"{prefix}-af {self._quote_af_value(','.join(kept), quote_char)}"
+
+        # Enable loudnorm: replace/insert
+        if filter_expr:
+            if self._AF_OPTION_RE.search(cmd):
+                new_cmd = self._AF_OPTION_RE.sub(repl_enable, cmd, count=1)
+            else:
+                insert_at: Optional[int] = None
+                for patt in [r"\s-c:a\b", r"\s-map_chapters\b", r"\s-y\b"]:
+                    m = re.search(patt, cmd)
+                    if m:
+                        insert_at = m.start()
+                        break
+                insert_str = f" -af {filter_expr}"
+                if insert_at is not None:
+                    new_cmd = cmd[:insert_at] + insert_str + cmd[insert_at:]
+                else:
+                    new_cmd = cmd + insert_str
+        else:
+            # Disable loudnorm: remove loudnorm entries from -af, but keep other filters.
+            if not self._AF_OPTION_RE.search(cmd):
+                return
+            new_cmd = self._AF_OPTION_RE.sub(repl_disable, cmd, count=1)
+
+        self.cmd_text.blockSignals(True)
+        self.cmd_text.setPlainText(new_cmd)
+        self.cmd_text.blockSignals(False)
 
     def _audio_filter_from_settings(self) -> Optional[str]:
         if not config.get_audio_normalize_enabled():
