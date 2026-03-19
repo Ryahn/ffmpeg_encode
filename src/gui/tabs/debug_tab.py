@@ -8,11 +8,14 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QGuiApplication, QTextCursor
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTabWidget,
@@ -33,6 +36,9 @@ class DebugTab(QWidget):
             mkvinfo_path=mkvinfo_path if mkvinfo_path != "mkvinfo" else None
         )
         self.current_file: Optional[Path] = None
+        self._debug_tab_index = -1
+        self._main_tab_current = -1
+        self._follow_timer: Optional[QTimer] = None
 
         root = QVBoxLayout(self)
         top = QHBoxLayout()
@@ -48,7 +54,7 @@ class DebugTab(QWidget):
         self.mkvinfo_text.setReadOnly(True)
         miw = QWidget()
         mil = QVBoxLayout(miw)
-        mil.addWidget(self._btn("Copy mkvinfo", lambda: self._copy(self.mkvinfo_text)))
+        mil.addWidget(self._btn_row(("Copy", lambda: self._copy(self.mkvinfo_text)), ("Clear", lambda: self._clear_view(self.mkvinfo_text))))
         mil.addWidget(self.mkvinfo_text)
         tabs.addTab(miw, "mkvinfo Output")
 
@@ -56,7 +62,7 @@ class DebugTab(QWidget):
         self.analysis_text.setReadOnly(True)
         aw = QWidget()
         al = QVBoxLayout(aw)
-        al.addWidget(self._btn("Copy analysis", lambda: self._copy(self.analysis_text)))
+        al.addWidget(self._btn_row(("Copy analysis", lambda: self._copy(self.analysis_text)), ("Clear", lambda: self._clear_view(self.analysis_text))))
         al.addWidget(self.analysis_text)
         tabs.addTab(aw, "Track Analysis")
 
@@ -67,6 +73,7 @@ class DebugTab(QWidget):
         mh = QHBoxLayout()
         mh.addWidget(self._btn("Run MediaInfo", self._run_mediainfo))
         mh.addWidget(self._btn("Copy", lambda: self._copy(self.mi_out)))
+        mh.addWidget(self._btn("Clear", lambda: self._clear_view(self.mi_out)))
         ml.addLayout(mh)
         ml.addWidget(self.mi_out)
         tabs.addTab(mi_tab, "MediaInfo")
@@ -80,7 +87,16 @@ class DebugTab(QWidget):
         lf.addWidget(self._btn("Open log dir", self._open_log_dir))
         lf.addWidget(self._btn("Refresh", self._refresh_log))
         lf.addWidget(self._btn("Copy", lambda: self._copy(self.log_display)))
+        lf.addWidget(self._btn("Clear view", self._clear_log_view))
+        lf.addWidget(self._btn("Clear buffer", self._clear_log_buffer))
         ll.addLayout(lf)
+        follow_row = QHBoxLayout()
+        self.follow_log_cb = QCheckBox("Follow new log lines (while Debug tab is open)")
+        self.follow_log_cb.setToolTip("Polls the in-memory log buffer every ~0.8s when this tab is selected.")
+        self.follow_log_cb.toggled.connect(self._update_follow_timer_state)
+        follow_row.addWidget(self.follow_log_cb)
+        follow_row.addStretch()
+        ll.addLayout(follow_row)
         self.log_path_label = QLabel("")
         ll.addWidget(self.log_path_label)
         ll.addWidget(self.log_display)
@@ -89,13 +105,76 @@ class DebugTab(QWidget):
 
         self._refresh_log()
 
+    def attach_follow_logging(self, tab_widget: QTabWidget, debug_tab_index: int) -> None:
+        self._debug_tab_index = debug_tab_index
+        self._main_tab_current = tab_widget.currentIndex()
+        self._follow_timer = QTimer(self)
+        self._follow_timer.setInterval(800)
+        self._follow_timer.timeout.connect(self._poll_follow_log)
+        tab_widget.currentChanged.connect(self._on_app_tab_changed)
+
+    def _on_app_tab_changed(self, index: int) -> None:
+        self._main_tab_current = index
+        self._update_follow_timer_state()
+
+    def _update_follow_timer_state(self) -> None:
+        if self._follow_timer is None:
+            return
+        if (
+            self._main_tab_current == self._debug_tab_index
+            and self.follow_log_cb.isChecked()
+        ):
+            self._follow_timer.start()
+        else:
+            self._follow_timer.stop()
+
+    def _poll_follow_log(self) -> None:
+        if not self.follow_log_cb.isChecked():
+            return
+        recent = logger.get_recent_logs(500)
+        text = (
+            "\n".join(f"[{a}] {b}" for a, b in recent)
+            if recent
+            else "No log entries yet."
+        )
+        if text == self.log_display.toPlainText():
+            return
+        self.log_display.setPlainText(text)
+        self._scroll_plain_to_end(self.log_display)
+
+    def reload_from_config(self) -> None:
+        """Recreate track analyzer after mkvinfo path changes in Settings."""
+        m = config.get_mkvinfo_path() or "mkvinfo"
+        self.track_analyzer = TrackAnalyzer(
+            mkvinfo_path=m if m != "mkvinfo" else None
+        )
+
     def _btn(self, t, fn):
         b = QPushButton(t)
         b.clicked.connect(fn)
         return b
 
+    def _btn_row(self, *pairs: tuple[str, object]) -> QWidget:
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        for label, slot in pairs:
+            h.addWidget(self._btn(label, slot))
+        h.addStretch()
+        return w
+
     def _copy(self, w: QPlainTextEdit) -> None:
         QGuiApplication.clipboard().setText(w.toPlainText())
+
+    def _clear_view(self, w: QPlainTextEdit) -> None:
+        w.clear()
+
+    def _scroll_plain_to_end(self, w: QPlainTextEdit) -> None:
+        cursor = w.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        w.setTextCursor(cursor)
+        w.ensureCursorVisible()
+        w.verticalScrollBar().setValue(w.verticalScrollBar().maximum())
 
     def _browse(self) -> None:
         p, _ = QFileDialog.getOpenFileName(
@@ -110,6 +189,7 @@ class DebugTab(QWidget):
             return
         out = self.track_analyzer.get_mkvinfo_output(self.current_file)
         self.mkvinfo_text.setPlainText(out or "Failed to get mkvinfo output.")
+        self._scroll_plain_to_end(self.mkvinfo_text)
         tracks = self.track_analyzer.analyze_tracks(self.current_file)
         lines = [f"File: {self.current_file.name}", ""]
         lines.append(f"Audio Track: {tracks.get('audio', 'Not found')}")
@@ -131,10 +211,11 @@ class DebugTab(QWidget):
         lines.append(f"Audio lang tags: {config.get_audio_language_tags()}")
         lines.append(f"Subtitle name patterns: {config.get_subtitle_name_patterns()}")
         self.analysis_text.setPlainText("\n".join(lines))
+        self._scroll_plain_to_end(self.analysis_text)
 
     def _run_mediainfo(self) -> None:
         if not self.current_file or not self.current_file.exists():
-            self.mi_out.setPlainText("Select a file and click Analyze first.")
+            self.mi_out.setPlainText("Select a file and click Browse first.")
             return
         mediainfo_path = config.get_mediainfo_path()
         if mediainfo_path and Path(mediainfo_path).exists():
@@ -158,6 +239,7 @@ class DebugTab(QWidget):
         try:
             r = subprocess.run(**run_kw)
             self.mi_out.setPlainText(r.stdout or r.stderr or "(no output)")
+            self._scroll_plain_to_end(self.mi_out)
         except Exception as e:
             self.mi_out.setPlainText(str(e))
 
@@ -188,14 +270,32 @@ class DebugTab(QWidget):
             except Exception:
                 pass
 
+    def _clear_log_view(self) -> None:
+        self.log_display.clear()
+
+    def _clear_log_buffer(self) -> None:
+        r = QMessageBox.question(
+            self,
+            "Clear log buffer",
+            "Remove all entries from the in-memory session log?\n"
+            "(The log file on disk is not deleted.)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        logger.clear_buffer()
+        self._refresh_log()
+
     def _refresh_log(self) -> None:
         lf = logger.get_log_file()
         if lf and lf.exists():
             self.log_path_label.setText(str(lf))
         else:
             self.log_path_label.setText("No log file")
-        recent = logger.get_recent_logs(100)
+        recent = logger.get_recent_logs(500)
         if not recent:
             self.log_display.setPlainText("No log entries yet.")
             return
         self.log_display.setPlainText("\n".join(f"[{a}] {b}" for a, b in recent))
+        self._scroll_plain_to_end(self.log_display)

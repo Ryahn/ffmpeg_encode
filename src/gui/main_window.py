@@ -82,6 +82,8 @@ class MainWindow(QMainWindow):
         self._tab_index_files = self.tab_widget.indexOf(self.files_tab)
         self._tab_index_settings = self.tab_widget.indexOf(self.settings_tab)
         self._tab_index_ffmpeg = self.tab_widget.indexOf(self.ffmpeg_tab)
+        self._tab_index_debug = self.tab_widget.indexOf(self.debug_tab)
+        self.debug_tab.attach_follow_logging(self.tab_widget, self._tab_index_debug)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         self.settings_tab.main_window = self
 
@@ -151,6 +153,8 @@ class MainWindow(QMainWindow):
             self.settings_tab.reload_from_config()
         elif index == self._tab_index_ffmpeg:
             self.ffmpeg_tab.apply_audio_normalize_settings_from_config()
+        elif index == self._tab_index_debug:
+            self.debug_tab.reload_from_config()
 
     def refresh_encoder_clients(self) -> None:
         """Recreate encoders/analyzers after tool paths change in Settings."""

@@ -3,36 +3,34 @@
 from __future__ import annotations
 
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
-    QMessageBox,
 )
 
 from core.package_manager import PackageManager
+from utils.config import config
 
 
 def _get_version() -> str:
     try:
-        from ... import __version__
-
-        return __version__
-    except ImportError:
-        pass
-    try:
-        init_file = Path(__file__).parent.parent.parent / "__init__.py"
-        with open(init_file, encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("__version__"):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        init_file = Path(__file__).resolve().parents[2] / "__init__.py"
+        if init_file.is_file():
+            for line in init_file.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("__version__"):
+                    return stripped.split("=", 1)[1].strip().strip('"').strip("'")
     except Exception:
         pass
     return "Unknown"
@@ -73,6 +71,7 @@ class AboutTab(QWidget):
             ("FFmpeg", self.package_manager.check_ffmpeg),
             ("HandBrake CLI", self.package_manager.check_handbrake),
             ("mkvinfo (MKVToolNix)", self.package_manager.check_mkvinfo),
+            ("MediaInfo", self._check_mediainfo),
         ]:
             info = self._tool_line(name, fn)
             lb = QLabel(f"<b>{name}:</b> {info}")
@@ -89,13 +88,36 @@ class AboutTab(QWidget):
         except Exception:
             v.addWidget(QLabel("Pillow: not installed"))
 
+        ref_row = QWidget()
+        ref_l = QVBoxLayout(ref_row)
+        ref_l.setContentsMargins(0, 0, 0, 0)
+        h = QHBoxLayout()
         ref = QPushButton("Refresh dependencies")
         ref.clicked.connect(self._refresh)
-        v.addWidget(ref)
+        h.addWidget(ref)
+        copy_diag = QPushButton("Copy diagnostics")
+        copy_diag.setToolTip("Copy version and dependency summary for bug reports.")
+        copy_diag.clicked.connect(self._copy_diagnostics)
+        h.addWidget(copy_diag)
+        h.addStretch()
+        ref_l.addLayout(h)
+        self._about_status = QLabel("")
+        self._about_status.setStyleSheet("color: #888888; font-size: 12px;")
+        ref_l.addWidget(self._about_status)
+        v.addWidget(ref_row)
         v.addStretch()
 
         out = QVBoxLayout(self)
         out.addWidget(scroll)
+
+    def _check_mediainfo(self) -> tuple[bool, str]:
+        p = (config.get_mediainfo_path() or "").strip()
+        if p and Path(p).is_file():
+            return True, str(Path(p).resolve())
+        w = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
+        if w:
+            return True, w
+        return False, ""
 
     def _tool_line(self, name: str, check_func) -> str:
         found, path = check_func()
@@ -146,9 +168,45 @@ class AboutTab(QWidget):
                     for p in parts:
                         if p.replace(".", "").isdigit():
                             return p
+            if tool_name == "MediaInfo":
+                run_kw: dict = {
+                    "args": [path, "--version"],
+                    "stdin": subprocess.DEVNULL,
+                    "capture_output": True,
+                    "text": True,
+                    "timeout": 5,
+                }
+                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    run_kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+                r = subprocess.run(**run_kw)
+                if r.returncode == 0 and r.stdout:
+                    line = r.stdout.split("\n")[0].strip()
+                    return line[:80] if line else None
         except Exception:
             pass
         return None
+
+    def _diagnostics_text(self) -> str:
+        lines = [
+            f"Video Encoder {_get_version()}",
+            f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            f"PyQt6 {PYQT_VERSION_STR} (Qt {QT_VERSION_STR})",
+            f"Platform: {platform.system()} {platform.release()} ({platform.machine()})",
+            "",
+        ]
+        for name, fn in [
+            ("FFmpeg", self.package_manager.check_ffmpeg),
+            ("HandBrake CLI", self.package_manager.check_handbrake),
+            ("mkvinfo", self.package_manager.check_mkvinfo),
+            ("MediaInfo", self._check_mediainfo),
+        ]:
+            ok, path = fn()
+            lines.append(f"{name}: {'OK' if ok else 'missing'} {path}")
+        return "\n".join(lines)
+
+    def _copy_diagnostics(self) -> None:
+        QGuiApplication.clipboard().setText(self._diagnostics_text())
+        self._about_status.setText("Diagnostics copied to clipboard.")
 
     def _refresh(self) -> None:
         self.package_manager = PackageManager()
@@ -156,9 +214,10 @@ class AboutTab(QWidget):
             "FFmpeg": self.package_manager.check_ffmpeg,
             "HandBrake CLI": self.package_manager.check_handbrake,
             "mkvinfo (MKVToolNix)": self.package_manager.check_mkvinfo,
+            "MediaInfo": self._check_mediainfo,
         }
         for name, fn in mapping.items():
             if name in self.tool_labels:
                 info = self._tool_line(name, fn)
                 self.tool_labels[name].setText(f"<b>{name}:</b> {info}")
-        QMessageBox.information(self, "Refresh", "Dependency information refreshed.")
+        self._about_status.setText("Dependency list refreshed.")
