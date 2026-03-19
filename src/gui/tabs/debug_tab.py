@@ -2,6 +2,8 @@
 
 import customtkinter as ctk
 from tkinter import filedialog
+
+from ..theme import APP_TEXT_CMD, APP_TEXT_DIM, monospace_font
 from pathlib import Path
 from typing import Optional
 import os
@@ -67,7 +69,8 @@ class DebugTab(ctk.CTkFrame):
         ctk.CTkButton(mkvinfo_btn_frame, text="Copy", width=80, command=lambda: self._copy_text(self.mkvinfo_text)).pack(side="left", padx=(0, 5), pady=5)
         self.mkvinfo_text = ctk.CTkTextbox(
             mkvinfo_tab,
-            font=ctk.CTkFont(family="Courier", size=10)
+            font=monospace_font(10, master=self),
+            text_color=APP_TEXT_CMD,
         )
         self.mkvinfo_text.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -129,7 +132,8 @@ class DebugTab(ctk.CTkFrame):
         ctk.CTkButton(mi_btn_frame, text="Copy", width=80, command=lambda: self._copy_text(self.mediainfo_text)).pack(side="left", padx=(0, 5), pady=5)
         self.mediainfo_text = ctk.CTkTextbox(
             mi_tab,
-            font=ctk.CTkFont(family="Courier", size=10)
+            font=monospace_font(10, master=self),
+            text_color=APP_TEXT_CMD,
         )
         self.mediainfo_text.pack(fill="both", expand=True, padx=10, pady=10)
         self.mediainfo_text.insert("1.0", "Select a file and click Analyze, then use 'Run MediaInfo' to dump output here.")
@@ -197,7 +201,8 @@ class DebugTab(ctk.CTkFrame):
                 text=log_path_str,
                 anchor="w",
                 justify="left",
-                font=ctk.CTkFont(family="Courier", size=10)
+                font=monospace_font(10, master=self),
+                text_color=APP_TEXT_CMD,
             )
             self.log_path_label.pack(fill="x", padx=10, pady=5)
         else:
@@ -205,7 +210,7 @@ class DebugTab(ctk.CTkFrame):
                 info_frame,
                 text="No log file available (logging may have failed to initialize)",
                 anchor="w",
-                text_color="gray"
+                text_color=APP_TEXT_DIM,
             )
             self.log_path_label.pack(fill="x", padx=10, pady=5)
         
@@ -252,8 +257,9 @@ class DebugTab(ctk.CTkFrame):
         
         self.log_display = ctk.CTkTextbox(
             log_display_frame,
-            font=ctk.CTkFont(family="Courier", size=9),
-            wrap="word"
+            font=monospace_font(9, master=self),
+            text_color=APP_TEXT_CMD,
+            wrap="word",
         )
         self.log_display.pack(fill="both", expand=True, padx=10, pady=10)
         

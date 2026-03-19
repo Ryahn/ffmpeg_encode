@@ -23,7 +23,21 @@ At encode time, the app replaces these placeholders for each file:
 | `{SUBTITLE_TRACK}` | Detected subtitle track number |
 | `{SUBTITLE_FILE}` | Path to the extracted subtitle file when burning subtitles; if no subtitle file is available, the subtitle filter is removed from the filter chain |
 
+**PGS / HDMV (bitmap) subtitles:** FFmpeg’s `subtitles=` filter only supports **text** subs (libass). At encode time the app rewrites `-vf` to **`filter_complex`** with **`overlay`**, **`setpts=PTS-STARTPTS`**, **`eof_action=pass`**, **`shortest=0`**, and **`ts_sync_mode=nearest`** so sparse PGS frames stay aligned with the video. When a subtitle **stream index** is known, overlay uses **`[0:N]`** from the **same** file as the video (one `-i`) to avoid sidecar timeline drift; otherwise it falls back to a second `-i` on the extracted `.mkv` sidecar. Your preset can still use `subtitles='{SUBTITLE_FILE}'` in `-vf`; that segment is stripped when the rewrite runs.
+
 The literals `input.mkv` and `output.mp4` in the command are also replaced with the actual paths. Angle-bracket variants (e.g. `<INPUT>`) are supported the same way.
+
+---
+
+## Audio loudness normalization (Settings)
+
+In **Settings → Encoding Settings**, **Apply loudness normalization to audio (FFmpeg, single-pass loudnorm)** adds `-af loudnorm=I=…:TP=…:LRA=…` to commands **built by the preset translator** when the option is enabled. Defaults are **I=-16**, **TP=-1.5**, **LRA=11** (integrated single-pass mode, not a separate measure pass).
+
+- **Scope:** FFmpeg tab only; HandBrake CLI encoding is unaffected.
+- **Stale commands:** Toggling the setting does not rewrite the command text box. Click **Reset** on the FFmpeg tab (or reload the preset) to regenerate the command. Saved commands and manual edits keep whatever `-af` you wrote.
+- **PGS / bitmap subs:** The bitmap overlay rewrite replaces `-vf` with `-filter_complex` for video only; **`-af` and audio encoding options are preserved** in the argument tail.
+
+Optional numeric overrides (for power users) live in config as `audio_normalize_loudnorm_I`, `audio_normalize_loudnorm_TP`, and `audio_normalize_loudnorm_LRA`.
 
 ---
 

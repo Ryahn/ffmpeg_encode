@@ -3,6 +3,8 @@
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from pathlib import Path
+
+from ..theme import APP_BLUE_LIGHT, APP_TEXT_DIM
 from utils.config import config
 from core.package_manager import PackageManager
 
@@ -183,6 +185,28 @@ class SettingsTab(ctk.CTkFrame):
             variable=self.debug_var,
             command=self._on_debug_logging_changed
         ).pack(anchor="w")
+
+        normalize_frame = ctk.CTkFrame(encoding_frame)
+        normalize_frame.pack(fill="x", padx=10, pady=5)
+        self._create_help_icon(
+            normalize_frame,
+            "FFmpeg tab only. When enabled, preset-generated commands include single-pass "
+            "integrated loudnorm (EBU R128-style targets: I=-16 LUFS, TP=-1.5 dBTP, LRA=11 by default). "
+            "This is not full two-pass broadcast loudness. Audio is still re-encoded per your preset.\n\n"
+            "After changing this option, click Reset on the FFmpeg tab (or reload the preset) to refresh "
+            "the command text if you rely on the auto-generated command. Saved or hand-edited commands "
+            "are not modified automatically—add -af yourself or reload from preset.",
+        )
+        self.audio_normalize_switch = ctk.CTkSwitch(
+            normalize_frame,
+            text="Apply loudness normalization to audio (FFmpeg, single-pass loudnorm)",
+            command=self._on_audio_normalize_changed,
+        )
+        self.audio_normalize_switch.pack(side="left", padx=10, pady=10)
+        if config.get_audio_normalize_enabled():
+            self.audio_normalize_switch.select()
+        else:
+            self.audio_normalize_switch.deselect()
         
         # Track detection settings section
         track_frame = ctk.CTkFrame(scrollable)
@@ -300,7 +324,7 @@ class SettingsTab(ctk.CTkFrame):
             save_frame,
             text="Settings are automatically saved when changed. Use 'Save All' to explicitly save all current values.",
             font=ctk.CTkFont(size=12),
-            text_color="gray"
+            text_color=APP_TEXT_DIM,
         )
         save_info.pack(pady=10)
         
@@ -319,7 +343,7 @@ class SettingsTab(ctk.CTkFrame):
             parent,
             text="?",
             font=ctk.CTkFont(size=14, weight="bold"),
-            text_color="gray",
+            text_color=APP_TEXT_DIM,
             cursor="hand2",
             width=20
         )
@@ -329,8 +353,8 @@ class SettingsTab(ctk.CTkFrame):
             messagebox.showinfo("Help", help_text)
         
         help_label.bind("<Button-1>", show_help)
-        help_label.bind("<Enter>", lambda e: help_label.configure(text_color="blue"))
-        help_label.bind("<Leave>", lambda e: help_label.configure(text_color="gray"))
+        help_label.bind("<Enter>", lambda e: help_label.configure(text_color=APP_BLUE_LIGHT))
+        help_label.bind("<Leave>", lambda e: help_label.configure(text_color=APP_TEXT_DIM))
         
         return help_label
     
@@ -480,6 +504,10 @@ class SettingsTab(ctk.CTkFrame):
     def _on_debug_logging_changed(self):
         """Handle enable debug logging change"""
         config.set_debug_logging(self.debug_var.get())
+
+    def _on_audio_normalize_changed(self):
+        """Handle FFmpeg single-pass loudnorm toggle"""
+        config.set_audio_normalize_enabled(bool(self.audio_normalize_switch.get()))
     
     def _create_list_setting(self, parent, label, value_list, callback, help_text: str = None):
         """Create a list setting row (comma-separated)"""
@@ -569,6 +597,7 @@ class SettingsTab(ctk.CTkFrame):
             config.set_encoding_mode(self.mode_var.get())
             config.set_skip_existing(self.skip_var.get())
             config.set_debug_logging(self.debug_var.get())
+            config.set_audio_normalize_enabled(bool(self.audio_normalize_switch.get()))
             
             messagebox.showinfo("Settings Saved", "All settings have been saved successfully!")
         except Exception as e:

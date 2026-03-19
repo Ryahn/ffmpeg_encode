@@ -3,6 +3,8 @@
 import customtkinter as ctk
 from typing import Optional
 
+from ..theme import APP_TEXT
+
 
 class ProgressDisplay(ctk.CTkFrame):
     """Progress display with bar and text"""
@@ -25,7 +27,8 @@ class ProgressDisplay(ctk.CTkFrame):
         self.status_label = ctk.CTkLabel(
             self,
             textvariable=self.status_var,
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(size=12),
+            text_color=APP_TEXT,
         )
         self.status_label.pack(pady=5)
     

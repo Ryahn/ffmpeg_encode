@@ -6,7 +6,10 @@ a = Analysis(
     ['src/main.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('src/gui/icon.ico', 'gui')],
+    datas=[
+        ('src/gui/icon.ico', 'gui'),
+        ('src/gui/themes/video_encoder_dark.json', 'gui/themes'),
+    ],
     hiddenimports=[
         'customtkinter',
         'PIL',

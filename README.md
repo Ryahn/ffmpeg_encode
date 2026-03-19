@@ -9,6 +9,7 @@ A cross-platform Python GUI application for encoding video files using HandBrake
 - **HandBrake preset support**: Load and use HandBrake JSON presets
 - **Preset management**: Dropdown selection with auto-save and last-used preset auto-loading
 - **Automatic FFmpeg translation**: Converts HandBrake presets to FFmpeg commands
+- **Optional FFmpeg loudness normalization**: Settings toggle for single-pass integrated `loudnorm` on preset-generated commands
 - **FFmpeg command management**: Save, load, delete, and manage custom FFmpeg commands
 - **Placeholder system**: Use `{INPUT}`, `{OUTPUT}`, `{AUDIO_TRACK}`, `{SUBTITLE_TRACK}`, `{SUBTITLE_FILE}` in FFmpeg commands
 - **Smart track detection**: Automatically finds English audio and subtitle tracks with configurable patterns

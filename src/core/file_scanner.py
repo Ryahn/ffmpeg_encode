@@ -24,17 +24,17 @@ class FileScanner:
         if not directory.exists() or not directory.is_dir():
             return self.found_files
         
+        candidates: List[Path] = []
         if recursive:
-            for ext in self.VIDEO_EXTENSIONS:
-                self.found_files.extend(directory.rglob(f"*{ext}"))
-                self.found_files.extend(directory.rglob(f"*{ext.upper()}"))
+            for path in directory.rglob("*"):
+                if path.is_file() and path.suffix.lower() in self.VIDEO_EXTENSIONS:
+                    candidates.append(path)
         else:
-            for ext in self.VIDEO_EXTENSIONS:
-                self.found_files.extend(directory.glob(f"*{ext}"))
-                self.found_files.extend(directory.glob(f"*{ext.upper()}"))
+            for path in directory.iterdir():
+                if path.is_file() and path.suffix.lower() in self.VIDEO_EXTENSIONS:
+                    candidates.append(path)
         
-        # Remove duplicates and sort
-        self.found_files = sorted(set(self.found_files))
+        self.found_files = sorted(set(candidates))
         return self.found_files
     
     def is_video_file(self, file_path: Path) -> bool:
@@ -55,4 +55,3 @@ class FileScanner:
                 return f"{size_bytes:.2f} {unit}"
             size_bytes /= 1024.0
         return f"{size_bytes:.2f} PB"
-

@@ -11,6 +11,7 @@ from .tabs.ffmpeg_tab import FFmpegTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.debug_tab import DebugTab
 from .tabs.about_tab import AboutTab
+from .theme import APP_BG, APP_TEXT_DIM, prime_monospace_font
 from .widgets.toast import ToastManager
 from core.package_manager import PackageManager
 from core.notifications import BatchNotification
@@ -27,13 +28,11 @@ class MainWindow(ctk.CTk):
         # Configure window
         self.title("Video Encoder")
         self.geometry("1200x800")
+        self.configure(fg_color=APP_BG)
+        prime_monospace_font(self)
         
         # Set window icon
         self._set_icon()
-        
-        # Set appearance
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
         
         # Initialize toast manager and notifications
         self.toast_manager = ToastManager(self)
@@ -47,7 +46,7 @@ class MainWindow(ctk.CTk):
         
         # Create tabs
         self.tabview = ctk.CTkTabview(self)
-        self.tabview.pack(fill="both", expand=True, padx=10, pady=10)
+        self.tabview.pack(fill="both", expand=True, padx=14, pady=14)
         
         # Files tab
         self.tabview.add("Files")
@@ -97,9 +96,10 @@ class MainWindow(ctk.CTk):
         self.status_bar = ctk.CTkLabel(
             self,
             text="Ready",
-            anchor="w"
+            anchor="w",
+            text_color=APP_TEXT_DIM,
         )
-        self.status_bar.pack(fill="x", side="bottom", padx=10, pady=5)
+        self.status_bar.pack(fill="x", side="bottom", padx=14, pady=(0, 8))
         
         # Update status
         self._update_status()

@@ -224,6 +224,11 @@ This setting is used as the default in the HandBrake and FFmpeg tabs.
 ### Step 11: Skip existing encoded files by default
 Check this box to enable "Skip Existing" by default in the HandBrake and FFmpeg tabs. This prevents accidentally re-encoding files that are already done.
 
+### Step 11a: Apply loudness normalization to audio (FFmpeg)
+**FFmpeg tab only.** When this switch is on, commands **generated from a HandBrake preset** include a single FFmpeg pass with integrated `loudnorm` (default targets: -16 LUFS integrated, -1.5 dBTP true peak, LRA 11). This is **not** full two-pass broadcast loudness measurement; it balances quality and simplicity. Advanced targets (`audio_normalize_loudnorm_I`, `TP`, `LRA`) can be adjusted in `config.json` if needed.
+
+After toggling this option, use **Reset** on the FFmpeg tab (or reload the preset) so the command text picks up `-af`. Saved or hand-edited commands are unchanged automatically—add your own `-af` or reload from the preset.
+
 ### Step 12: Track Detection Settings
 This section defines rules for automatically detecting and selecting audio and subtitle tracks. The application uses these patterns to find English audio tracks and "Signs & Songs" subtitle tracks.
 

@@ -8,16 +8,18 @@ import threading
 import time
 import os
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any, List
+from typing import Optional, Callable, Dict, Any, List, Tuple
 from queue import Queue, Empty
 import tempfile
 
 from core.subprocess_utils import get_subprocess_kwargs
+from core.ffmpeg_bitmap_subtitle_burn import rewrite_ffmpeg_args_for_bitmap_subtitle_overlay
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_FILE_WAIT_MAX_RETRIES = 10
 OUTPUT_FILE_INITIAL_DELAY_SEC = 0.1
+OUTPUT_FILE_STABILITY_DELAY_SEC = 0.15
 
 # Try to import psutil for better process management (optional)
 try:
@@ -101,6 +103,7 @@ class Encoder:
         output_file: Path,
         ffmpeg_args: list,
         subtitle_file: Optional[Path] = None,
+        subtitle_stream_index: Optional[int] = None,
         dry_run: bool = False
     ) -> bool:
         """Encode using FFmpeg"""
@@ -119,7 +122,27 @@ class Encoder:
                 args.append(self.ffmpeg_path)
             else:
                 args.append(arg)
-        
+
+        if subtitle_file is not None or subtitle_stream_index is not None:
+            rewritten = rewrite_ffmpeg_args_for_bitmap_subtitle_overlay(
+                args,
+                main_subtitle_stream_index=subtitle_stream_index,
+                sidecar_sub_path=Path(subtitle_file).expanduser() if subtitle_file else None,
+            )
+            if rewritten is not None:
+                if subtitle_stream_index is not None:
+                    self._log(
+                        "INFO",
+                        "PGS/bitmap subtitles: filter_complex overlay from main file stream "
+                        f"{subtitle_stream_index} (avoids sidecar timeline drift).",
+                    )
+                else:
+                    self._log(
+                        "INFO",
+                        "PGS/bitmap subtitles: filter_complex overlay from sidecar (subtitles= is text-only).",
+                    )
+                args = rewritten
+
         self._log("INFO", f"Prepared FFmpeg command with {len(args)} arguments")
         return self._run_encoder(args, "FFmpeg", output_file)
     
@@ -253,18 +276,12 @@ class Encoder:
                     self._log("ERROR", f"{encoder_name} error output:\n{error_output}")
                 self._log("ERROR", f"{encoder_name} exited with code {process.returncode}")
                 return False
-            
-            if process.returncode == 0:
-                # Wait for output file to be created (with retry)
-                if self._wait_for_file(output_file):
-                    self._log("SUCCESS", f"Encoding completed: {output_file.name}")
-                    return True
-                else:
-                    self._log("ERROR", "Process completed but output file not found")
-                    return False
-            else:
-                self._log("ERROR", f"{encoder_name} exited with code {process.returncode}")
-                return False
+
+            if self._wait_for_file(output_file):
+                self._log("SUCCESS", f"Encoding completed: {output_file.name}")
+                return True
+            self._log("ERROR", "Process completed but output file not found or not stable")
+            return False
                 
         except Exception as e:
             self._log("ERROR", f"Error encoding: {str(e)}")
@@ -415,11 +432,22 @@ class Encoder:
             self.progress_callback(progress)
     
     def _wait_for_file(self, file_path: Path, max_retries: int = OUTPUT_FILE_WAIT_MAX_RETRIES) -> bool:
-        """Wait for output file to be created"""
+        """Wait until output exists, is non-empty, and size is stable briefly (not mid-write)."""
         retry_count = 0
         while retry_count < max_retries:
             if file_path.exists():
-                return True
+                try:
+                    size_first = file_path.stat().st_size
+                except OSError:
+                    size_first = 0
+                if size_first > 0:
+                    time.sleep(OUTPUT_FILE_STABILITY_DELAY_SEC)
+                    try:
+                        size_second = file_path.stat().st_size
+                    except OSError:
+                        size_second = 0
+                    if size_first == size_second and size_second > 0:
+                        return True
             retry_count += 1
             delay = OUTPUT_FILE_INITIAL_DELAY_SEC * (2 ** (retry_count - 1))
             time.sleep(delay)
@@ -564,14 +592,37 @@ def extract_subtitle_stream(
     input_file: Path,
     subtitle_stream_id: int,
     output_file: Optional[Path] = None
-) -> Optional[Path]:
-    """Extract subtitle stream to temporary file"""
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Extract one subtitle stream with stream copy into a temporary Matroska file.
+
+    PGS / HDMV and most embedded subs are not ASS text; muxing them into ``.ass``
+    fails. Matroska accepts these codecs, and FFmpeg's ``subtitles=`` filter can
+    read subtitle streams from such a file.
+
+    Returns ``(path, None)`` on success, or ``(None, error_summary)`` on failure.
+    """
     if output_file is None:
-        # Create temporary file
-        temp_fd, temp_path = tempfile.mkstemp(suffix='.ass')
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".mkv")
         os.close(temp_fd)
         output_file = Path(temp_path)
-    
+
+    def _fail(stderr: Optional[str], exc: Optional[BaseException] = None) -> Tuple[Optional[Path], Optional[str]]:
+        if output_file.exists():
+            try:
+                output_file.unlink()
+            except OSError:
+                pass
+        detail = (stderr or "").strip()
+        if exc is not None:
+            detail = f"{type(exc).__name__}: {exc}" + (f" | {detail}" if detail else "")
+        if len(detail) > 1200:
+            detail = detail[:1200] + "…"
+        if detail:
+            logger.error("Subtitle extraction failed: %s", detail)
+        else:
+            logger.error("Subtitle extraction failed (no stderr)")
+        return None, detail or None
+
     try:
         args = [
             ffmpeg_path,
@@ -579,39 +630,27 @@ def extract_subtitle_stream(
             "-map", f"0:{subtitle_stream_id}",
             "-c", "copy",
             "-y",
-            str(output_file)
+            str(output_file),
         ]
-        
-        # Hide console window on Windows (for release builds)
+
         run_kwargs = {
-            'args': args,
-            'stdin': subprocess.DEVNULL,
-            'capture_output': True,
-            'text': True,
-            'timeout': 30
+            "args": args,
+            "stdin": subprocess.DEVNULL,
+            "capture_output": True,
+            "text": True,
+            "timeout": 120,
         }
         run_kwargs.update(get_subprocess_kwargs())
-        
+
         result = subprocess.run(**run_kwargs)
-        
+
         if result.returncode == 0 and output_file.exists():
-            # Verify file is not empty
             if output_file.stat().st_size > 0:
-                return output_file
-            else:
-                # Empty file, remove it
-                output_file.unlink()
-                return None
-        else:
-            logger.error("Subtitle extraction failed: returncode=%s", result.returncode)
-            if result.stderr:
-                logger.error("FFmpeg error: %s", result.stderr)
-            if output_file.exists():
-                output_file.unlink()
-            return None
-    except (subprocess.TimeoutExpired, OSError, FileNotFoundError) as e:
-        logger.error("Subtitle extraction exception: %s", e)
-        if output_file.exists():
+                return output_file, None
             output_file.unlink()
-        return None
+            return _fail(result.stderr, None)
+
+        return _fail(result.stderr, None)
+    except (subprocess.TimeoutExpired, OSError, FileNotFoundError) as e:
+        return _fail(None, e)
 

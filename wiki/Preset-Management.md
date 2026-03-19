@@ -30,7 +30,7 @@ Each preset is saved with a filename derived from the preset name (e.g. `My Pres
 
 ## How the preset becomes an FFmpeg command
 
-In the **FFmpeg** tab, when you select a HandBrake preset (or load one), the app uses the **FFmpegTranslator** to convert the preset into an FFmpeg command. The translation includes:
+In the **FFmpeg** tab, when you select a HandBrake preset (or load one), the app uses the **FFmpegTranslator** to convert the preset into an FFmpeg command. If **Apply loudness normalization to audio** is enabled in Settings, the translator also adds **single-pass `loudnorm`** on the mapped audio stream (see [FFmpeg Command Management](FFmpeg-Command-Management)). The translation includes:
 
 - Video: codec (e.g. libx264), CRF, preset, profile/level, resolution, color range, pixel format
 - Audio: codec (e.g. AAC), bitrate, mixdown (channels)

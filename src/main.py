@@ -14,7 +14,10 @@ else:
     base_path = str(Path(__file__).parent)
     sys.path.insert(0, base_path)
 
+import customtkinter as ctk
+
 from gui.main_window import MainWindow
+from gui.theme import apply_theme
 from utils.logger import logger
 
 
@@ -22,6 +25,8 @@ def main():
     """Main function"""
     try:
         logger.info("Starting Video Encoder GUI")
+        ctk.set_appearance_mode("dark")
+        apply_theme()
         app = MainWindow()
         app.run()
     except KeyboardInterrupt:

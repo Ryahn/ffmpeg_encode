@@ -5,6 +5,13 @@ import threading
 import time
 from typing import Callable, Optional
 
+from ..theme import (
+    APP_LOG_INFO,
+    APP_LOG_SUCCESS,
+    APP_LOG_WARN,
+    APP_STATUS_ERROR,
+)
+
 
 class Toast(ctk.CTkToplevel):
     """
@@ -47,12 +54,11 @@ class Toast(ctk.CTkToplevel):
         self.geometry(f"{width}x120")
         self.resizable(False, False)
 
-        # Color scheme based on message type
         colors = {
-            "info": ("#3B82F6", "#1E40AF"),      # Blue
-            "success": ("#10B981", "#047857"),   # Green
-            "warning": ("#F59E0B", "#D97706"),   # Orange
-            "error": ("#EF4444", "#DC2626"),     # Red
+            "info": (APP_LOG_INFO, "#164a7a"),
+            "success": (APP_LOG_SUCCESS, "#166534"),
+            "warning": (APP_LOG_WARN, "#a16207"),
+            "error": (APP_STATUS_ERROR, "#991b1b"),
         }
         fg_color, border_color = colors.get(message_type, colors["info"])
 

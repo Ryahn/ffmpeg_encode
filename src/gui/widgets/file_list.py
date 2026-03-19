@@ -6,6 +6,16 @@ from pathlib import Path
 from typing import Optional, Callable, List, Dict
 
 import customtkinter as ctk
+
+from ..theme import (
+    APP_BORDER,
+    APP_TEXT,
+    APP_TEXT_HEADER,
+    APP_TREE_HEADING_BG,
+    APP_TREE_ROW_BG,
+    APP_TREE_SELECTION_BG,
+    monospace_tk_tuple,
+)
 from core.file_scanner import FileScanner
 
 
@@ -78,23 +88,30 @@ class FileListWidget(ctk.CTkFrame):
     def _style_tree(self):
         try:
             style = ttk.Style()
-            treeview_font = ("TkDefaultFont", 16)
+            treeview_font = monospace_tk_tuple(self, 13)
             if ctk.get_appearance_mode() == "Dark":
                 style.theme_use("clam")
                 style.configure(
                     "Treeview",
-                    background="#2b2b2b",
-                    foreground="white",
-                    fieldbackground="#2b2b2b",
+                    background=APP_TREE_ROW_BG,
+                    foreground=APP_TEXT,
+                    fieldbackground=APP_TREE_ROW_BG,
                     font=treeview_font,
+                    bordercolor=APP_BORDER,
                 )
                 style.configure(
                     "Treeview.Heading",
-                    background="#3b3b3b",
-                    foreground="white",
+                    background=APP_TREE_HEADING_BG,
+                    foreground=APP_TEXT_HEADER,
                     font=treeview_font,
+                    borderwidth=1,
+                    relief="flat",
                 )
-                style.map("Treeview", background=[("selected", "#1f538d")])
+                style.map(
+                    "Treeview",
+                    background=[("selected", APP_TREE_SELECTION_BG)],
+                    foreground=[("selected", APP_TEXT)],
+                )
             else:
                 style.configure("Treeview", font=treeview_font)
                 style.configure("Treeview.Heading", font=treeview_font)
@@ -126,12 +143,15 @@ class FileListWidget(ctk.CTkFrame):
             self._tooltip,
             text=text,
             justify="left",
-            background="#ffffe0",
-            relief="solid",
-            borderwidth=1,
-            font=("TkDefaultFont", 9),
-            padx=4,
-            pady=2,
+            background=APP_TREE_HEADING_BG,
+            foreground=APP_TEXT,
+            highlightthickness=1,
+            highlightbackground=APP_BORDER,
+            relief="flat",
+            borderwidth=0,
+            font=monospace_tk_tuple(self, 9),
+            padx=6,
+            pady=4,
         )
         self._tooltip_label.pack()
         self._tooltip.after(5000, self._hide_tooltip)
@@ -162,7 +182,7 @@ class FileListWidget(ctk.CTkFrame):
             width_px = self._tree.column("path", "width") or 300
         except Exception:
             width_px = 300
-        char_width_approx = 9
+        char_width_approx = 8
         return max(15, int(width_px) // char_width_approx)
 
     def _on_tree_after_click_or_resize(self, event):
