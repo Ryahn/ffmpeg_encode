@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
 from PyQt6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QTableWidgetItem, QWidget
 
 from core.file_scanner import FileScanner
@@ -17,6 +18,38 @@ def _truncate_path(path_str: str, max_chars: int, show_end: bool = True) -> str:
     if show_end:
         return "..." + path_str[-(max_chars - 3) :]
     return path_str[: max_chars - 3] + "..."
+
+
+class _DropTable(QTableWidget):
+    """Table that accepts file/folder drops and forwards local paths to the owner."""
+
+    def __init__(self, owner: "FileListWidget", rows: int, cols: int):
+        super().__init__(rows, cols, owner)
+        self._owner = owner
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths: List[Path] = []
+        for url in event.mimeData().urls():
+            local = url.toLocalFile()
+            if local:
+                paths.append(Path(local))
+        if paths:
+            self._owner._emit_paths_dropped(paths)
+        event.acceptProposedAction()
 
 
 class FileListWidget(QWidget):
@@ -37,11 +70,12 @@ class FileListWidget(QWidget):
         self.scanner = FileScanner()
         self.files: List[Dict] = []
         self.on_file_selected: Optional[Callable] = None
+        self.on_paths_dropped: Optional[Callable[[List[Path]], None]] = None
         self._sort_column: Optional[int] = None
         self._sort_reverse = False
         self._refresh_timer: Optional[QTimer] = None
 
-        self._table = QTableWidget(0, 5, self)
+        self._table = _DropTable(self, 0, 5)
         self._table.setHorizontalHeaderLabels(["", "Source Path", "Size", "Tracks", "Status"])
         self._table.horizontalHeader().setSectionResizeMode(self.COL_PATH, QHeaderView.ResizeMode.Stretch)
         self._table.horizontalHeader().setSectionResizeMode(self.COL_SEL, QHeaderView.ResizeMode.Fixed)
@@ -58,6 +92,10 @@ class FileListWidget(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._table)
+
+    def _emit_paths_dropped(self, paths: List[Path]) -> None:
+        if self.on_paths_dropped:
+            self.on_paths_dropped(paths)
 
     def _path_column_max_chars(self) -> int:
         w = self._table.columnWidth(self.COL_PATH)

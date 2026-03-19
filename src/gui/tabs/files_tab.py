@@ -138,6 +138,7 @@ class FilesTab(QWidget):
         root.addWidget(controls)
 
         self.file_list = FileListWidget(self)
+        self.file_list.on_paths_dropped = self._on_paths_dropped
         root.addWidget(self.file_list, stretch=1)
 
         bottom = QHBoxLayout()
@@ -291,6 +292,38 @@ class FilesTab(QWidget):
         config.set_default_output_folder("")
         self._update_preview()
 
+    def _ingest_local_paths(self, paths: List[Path]) -> int:
+        """Add files or scan dropped/selected paths. Returns count of list entries added."""
+        count = 0
+        for raw in paths:
+            try:
+                path = raw.resolve()
+            except OSError:
+                path = raw
+            if not path.exists():
+                continue
+            if path.is_file():
+                if self.scanner.is_video_file(path):
+                    root = path.parent.parent if path.parent != path else path.parent
+                    self.file_list.add_file(path, root=root)
+                    count += 1
+            elif path.is_dir():
+                found = self.scanner.scan_directory(path, recursive=True)
+                for fp in found:
+                    self.file_list.add_file(fp, relative_to=path, root=path)
+                    count += 1
+        return count
+
+    def _on_paths_dropped(self, paths: List[Path]) -> None:
+        n = self._ingest_local_paths(paths)
+        if n > 0:
+            if self.on_files_changed:
+                self.on_files_changed()
+            self._update_preview()
+            self._show_toast(f"Added {n} item(s) from drop", "success")
+        elif paths:
+            self._show_toast("No video files found in the drop.", "warning")
+
     def _scan_folder(self) -> None:
         if not self.scan_folder:
             self._show_toast("Please select a scan folder first", "warning")
@@ -311,13 +344,15 @@ class FilesTab(QWidget):
             "",
             "Video files (*.mkv *.mp4 *.mov *.avi *.m4v *.flv *.wmv *.webm);;All files (*.*)",
         )
-        for fp in paths:
-            path = Path(fp)
-            root = path.parent.parent if path.parent != path else path.parent
-            self.file_list.add_file(path, root=root)
-        if self.on_files_changed:
-            self.on_files_changed()
-        self._update_preview()
+        if not paths:
+            return
+        n = self._ingest_local_paths([Path(p) for p in paths])
+        if n > 0:
+            if self.on_files_changed:
+                self.on_files_changed()
+            self._update_preview()
+        else:
+            self._show_toast("No supported video files in selection.", "warning")
 
     def _remove_selected(self) -> None:
         n = self.file_list.remove_selected_files()

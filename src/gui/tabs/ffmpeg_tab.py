@@ -70,11 +70,6 @@ class FFmpegTab(QWidget):
         self._preview_timer.timeout.connect(self._update_command_preview_display)
 
         self._bridge = _FFmpegUiBridge(self)
-        self._bridge.log_msg.connect(self._append_log)
-        self._bridge.progress.connect(self._apply_progress)
-        self._bridge.reset_ui.connect(self._reset_ui_on_encode_end)
-        self._bridge.toast.connect(self._emit_toast)
-        self._bridge.status_text.connect(self.progress_display.set_status)
 
         outer = QVBoxLayout(self)
         scroll = QScrollArea()
@@ -168,13 +163,19 @@ class FFmpegTab(QWidget):
 
         log_fr = QFrame()
         ll = QVBoxLayout(log_fr)
+        self.log_viewer = LogViewer(height=180)
         lh = QHBoxLayout()
         lh.addWidget(QLabel("<b>Encoding Log</b>"))
         lh.addWidget(self._btn("Copy", lambda: self.log_viewer.copy_to_clipboard()))
         ll.addLayout(lh)
-        self.log_viewer = LogViewer(height=180)
         ll.addWidget(self.log_viewer)
         outer.addWidget(log_fr)
+
+        self._bridge.log_msg.connect(self._append_log)
+        self._bridge.progress.connect(self._apply_progress)
+        self._bridge.reset_ui.connect(self._reset_ui_on_encode_end)
+        self._bridge.toast.connect(self._emit_toast)
+        self._bridge.status_text.connect(self.progress_display.set_status)
 
         self._init_encoder()
         self._refresh_preset_dropdown()

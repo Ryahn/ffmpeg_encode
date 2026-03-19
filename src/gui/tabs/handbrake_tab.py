@@ -59,11 +59,6 @@ class HandBrakeTab(QWidget):
         self.get_output_path_callback: Optional[Callable] = None
 
         self._bridge = _HandBrakeUiBridge(self)
-        self._bridge.log_msg.connect(self._append_log)
-        self._bridge.progress.connect(self._apply_progress)
-        self._bridge.reset_ui.connect(self._reset_ui_on_encode_end)
-        self._bridge.toast.connect(self._emit_toast)
-        self._bridge.status_text.connect(self.progress_display.set_status)
 
         root = QVBoxLayout(self)
         preset_row = QHBoxLayout()
@@ -112,13 +107,19 @@ class HandBrakeTab(QWidget):
 
         log_fr = QFrame()
         log_l = QVBoxLayout(log_fr)
+        self.log_viewer = LogViewer(height=200)
         hdr = QHBoxLayout()
         hdr.addWidget(QLabel("<b>Encoding Log</b>"))
         hdr.addWidget(self._btn("Copy", lambda: self.log_viewer.copy_to_clipboard()))
         log_l.addLayout(hdr)
-        self.log_viewer = LogViewer(height=200)
         log_l.addWidget(self.log_viewer)
         root.addWidget(log_fr, stretch=1)
+
+        self._bridge.log_msg.connect(self._append_log)
+        self._bridge.progress.connect(self._apply_progress)
+        self._bridge.reset_ui.connect(self._reset_ui_on_encode_end)
+        self._bridge.toast.connect(self._emit_toast)
+        self._bridge.status_text.connect(self.progress_display.set_status)
 
         self._init_encoder()
         self._refresh_preset_dropdown()
