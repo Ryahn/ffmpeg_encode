@@ -212,9 +212,4 @@ def get_stylesheet() -> str:
         border: 1px solid {T.APP_BORDER};
         padding: 4px;
     }}
-    QFrame#ToastFrame {{
-        border-radius: 8px;
-        border: 1px solid {T.APP_BORDER};
-        padding: 8px;
-    }}
     """

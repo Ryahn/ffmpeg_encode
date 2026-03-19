@@ -6,13 +6,14 @@ import threading
 from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QLabel, QMainWindow, QVBoxLayout, QWidget
-
-from ..theme import (
-    APP_LOG_INFO,
-    APP_LOG_SUCCESS,
-    APP_LOG_WARN,
-    APP_STATUS_ERROR,
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QLabel,
+    QMainWindow,
+    QVBoxLayout,
+    QWidget,
 )
 
 
@@ -20,14 +21,29 @@ class _ToastBridge(QObject):
     request_show = pyqtSignal(str, str, int)
 
 
-def _toast_colors(message_type: str) -> Tuple[str, str]:
+def _toast_panel_colors(message_type: str) -> Tuple[str, str]:
+    """Solid fill + accent border (dark enough for white text)."""
     colors = {
-        "info": (APP_LOG_INFO, "#164a7a"),
-        "success": (APP_LOG_SUCCESS, "#166534"),
-        "warning": (APP_LOG_WARN, "#a16207"),
-        "error": (APP_STATUS_ERROR, "#991b1b"),
+        "info": ("#1a4a7a", "#5ba4f5"),
+        "success": ("#14532d", "#4ade80"),
+        "warning": ("#5c420f", "#f0a500"),
+        "error": ("#5c1a1a", "#ff5f57"),
     }
     return colors.get(message_type, colors["info"])
+
+
+def _toast_message_rich_text(plain: str) -> str:
+    """White label text with 8-way 1px black stroke via text-shadow (Qt RichText)."""
+    esc = html.escape(plain).replace("\n", "<br/>")
+    stroke = (
+        "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, "
+        "0 -1px 0 #000, 0 1px 0 #000, -1px 0 0 #000, 1px 0 0 #000"
+    )
+    return (
+        f'<body style="margin:0;">'
+        f'<span style="color:#ffffff; font-weight:600; font-size:13px; text-shadow:{stroke};">'
+        f"{esc}</span></body>"
+    )
 
 
 class ToastManager:
@@ -57,10 +73,15 @@ class ToastManager:
         self._bridge.request_show.emit(message, message_type, duration)
 
     def _show_impl(self, message: str, message_type: str, duration: int) -> None:
+        # Must not call _display_next while holding _lock: _display_next acquires the same Lock
+        # (non-reentrant) and would deadlock the GUI thread.
+        start_now = False
         with self._lock:
             self._queue.append((message, message_type, duration))
             if len(self._queue) == 1:
-                self._display_next()
+                start_now = True
+        if start_now:
+            self._display_next()
 
     def _display_next(self) -> None:
         with self._lock:
@@ -75,18 +96,24 @@ class ToastManager:
             self._schedule_next_after_pop()
             return
 
-        fg, border = _toast_colors(message_type)
+        bg, border = _toast_panel_colors(message_type)
         frame = QFrame(central)
         frame.setObjectName("ToastFrame")
         frame.setStyleSheet(
-            f"QFrame#ToastFrame {{ background-color: {fg}; border: 2px solid {border}; "
-            f"border-radius: 8px; padding: 8px; }}"
+            f"QFrame#ToastFrame {{ background-color: {bg}; border: 2px solid {border}; "
+            f"border-radius: 8px; }}"
         )
         layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(0)
         lbl = QLabel(message)
         lbl.setWordWrap(True)
-        lbl.setStyleSheet("color: white; font-size: 12px;")
         lbl.setMaximumWidth(380)
+        lbl.setStyleSheet(
+            "QLabel { background-color: transparent; color: #ffffff; border: none; "
+            "padding: 0px; margin: 0px; font-size: 13px; font-weight: 600; }"
+        )
+        _apply_toast_text_outline(lbl)
         layout.addWidget(lbl)
 
         frame.adjustSize()
