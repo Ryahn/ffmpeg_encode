@@ -31,20 +31,13 @@ def _toast_panel_colors(message_type: str) -> Tuple[str, str]:
     }
     return colors.get(message_type, colors["info"])
 
-
-def _toast_message_rich_text(plain: str) -> str:
-    """White label text with 8-way 1px black stroke via text-shadow (Qt RichText)."""
-    esc = html.escape(plain).replace("\n", "<br/>")
-    stroke = (
-        "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, "
-        "0 -1px 0 #000, 0 1px 0 #000, -1px 0 0 #000, 1px 0 0 #000"
-    )
-    return (
-        f'<body style="margin:0;">'
-        f'<span style="color:#ffffff; font-weight:600; font-size:13px; text-shadow:{stroke};">'
-        f"{esc}</span></body>"
-    )
-
+def _apply_toast_text_outline(lbl: QLabel) -> None:
+    """Approximate 1-2px black text outline using a tight shadow effect."""
+    effect = QGraphicsDropShadowEffect(lbl)
+    effect.setBlurRadius(2)
+    effect.setColor(QColor(0, 0, 0, 255))
+    effect.setOffset(0, 0)
+    lbl.setGraphicsEffect(effect)
 
 class ToastManager:
     """
