@@ -1,47 +1,30 @@
-"""Progress bar widget"""
+"""Progress bar + status label (Qt)."""
 
-import customtkinter as ctk
-from typing import Optional
+from __future__ import annotations
 
-from ..theme import APP_TEXT
+from PyQt6.QtWidgets import QFrame, QLabel, QProgressBar, QVBoxLayout
 
 
-class ProgressDisplay(ctk.CTkFrame):
-    """Progress display with bar and text"""
-    
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        
-        self.progress_var = ctk.DoubleVar(value=0.0)
-        self.status_var = ctk.StringVar(value="Ready")
-        
-        # Progress bar
-        self.progress_bar = ctk.CTkProgressBar(
-            self,
-            variable=self.progress_var,
-            width=400
-        )
-        self.progress_bar.pack(fill="x", padx=10, pady=5)
-        
-        # Status label
-        self.status_label = ctk.CTkLabel(
-            self,
-            textvariable=self.status_var,
-            font=ctk.CTkFont(size=12),
-            text_color=APP_TEXT,
-        )
-        self.status_label.pack(pady=5)
-    
-    def set_progress(self, percent: float):
-        """Set progress percentage (0-100)"""
-        self.progress_var.set(percent / 100.0)
-    
-    def set_status(self, status: str):
-        """Set status text"""
-        self.status_var.set(status)
-    
-    def reset(self):
-        """Reset progress display"""
-        self.progress_var.set(0.0)
-        self.status_var.set("Ready")
+class ProgressDisplay(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._bar = QProgressBar(self)
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._status = QLabel("Ready", self)
+        lay = QVBoxLayout(self)
+        lay.addWidget(self._bar)
+        lay.addWidget(self._status)
 
+    def set_progress(self, percent: float) -> None:
+        self._bar.setValue(int(max(0, min(100, percent))))
+
+    def set_status(self, status: str) -> None:
+        self._status.setText(status)
+
+    def get_status(self) -> str:
+        return self._status.text()
+
+    def reset(self) -> None:
+        self._bar.setValue(0)
+        self._status.setText("Ready")

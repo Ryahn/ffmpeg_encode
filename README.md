@@ -26,9 +26,16 @@ A cross-platform Python GUI application for encoding video files using HandBrake
 - **Debug tab**: Analyze individual files to see track information and mkvinfo output
 - **Cross-platform config**: Platform-appropriate config directory handling (Windows: AppData\Local, macOS/Linux: ~/.video_encoder)
 
+## GUI stack (this branch)
+
+Active development for the **PyQt6** UI is on branch **`gui/migration-pyqt6`**. The main app uses **PyQt6** (see `requirements.txt`). In-app toasts use a **QFrame overlay** anchored to the bottom-right of the main window.
+
+The helper script `scripts/move_encoded_shows.py` still uses CustomTkinter; install it separately if you use that script: `pip install customtkinter`.
+
 ## Requirements
 
 - Python 3.8 or higher
+- **PyQt6** (installed via `pip install -r requirements.txt`)
 - FFmpeg (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install via your system package manager, e.g. `apt install ffmpeg`)
 - HandBrake CLI (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install via your package manager, e.g. `apt install handbrake-cli`)
 - MKVToolNix (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install the package that provides `mkvinfo`, e.g. `apt install mkvtoolnix`)

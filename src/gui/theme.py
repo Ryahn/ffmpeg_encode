@@ -1,17 +1,10 @@
-"""Application theme tokens and CustomTkinter theme loading.
+"""Semantic color tokens for the app (shared by QSS in styles.py).
 
-Runtime colors match app-theme.css :root. Tk does not parse CSS; keep JSON + this
-module in sync when changing the design.
+Runtime colors match app-theme.css :root. Tk/CustomTkinter helpers were removed
+for the PyQt6 GUI; use gui.styles.get_stylesheet() at startup.
 """
 
 from __future__ import annotations
-
-import sys
-import tkinter.font as tkfont
-from pathlib import Path
-from typing import Optional
-
-import customtkinter as ctk
 
 # Surfaces (app-theme.css)
 APP_BG = "#1a1b1f"
@@ -49,7 +42,6 @@ APP_BUTTON_DISABLED_TEXT = "#555555"
 
 APP_SCROLLBAR_THUMB = "#3a3b40"
 
-# ttk.Treeview: selection hint (~ rgba(29, 111, 184, 0.18) on dark body)
 APP_TREE_ROW_BG = APP_BG_SUNKEN
 APP_TREE_HEADING_BG = APP_BG_RAISED
 APP_TREE_SELECTION_BG = "#1e3a52"
@@ -61,54 +53,14 @@ MONO_FONT_CANDIDATES = (
     "Courier New",
 )
 
-_cached_mono_family: Optional[str] = None
 
+def theme_json_path():
+    """Legacy path for bundled JSON theme (unused by PyQt6)."""
+    import sys
+    from pathlib import Path
 
-def theme_json_path() -> Path:
     if getattr(sys, "frozen", False):
         bundled = Path(sys._MEIPASS) / "gui" / "themes" / "video_encoder_dark.json"
         if bundled.exists():
             return bundled
     return Path(__file__).resolve().parent / "themes" / "video_encoder_dark.json"
-
-
-def apply_theme() -> None:
-    path = theme_json_path()
-    if path.is_file():
-        ctk.set_default_color_theme(str(path))
-    else:
-        ctk.set_default_color_theme("blue")
-
-
-def prime_monospace_font(master) -> None:
-    """Resolve monospace family once (call after a Tk window exists)."""
-    global _cached_mono_family
-    if _cached_mono_family is not None:
-        return
-    try:
-        root = master.winfo_toplevel()
-        families = set(tkfont.families(root))
-    except Exception:
-        families = set()
-    _cached_mono_family = "Consolas"
-    for candidate in MONO_FONT_CANDIDATES:
-        if candidate in families:
-            _cached_mono_family = candidate
-            break
-
-
-def monospace_font(
-    size: int = 13,
-    weight: str = "normal",
-    master=None,
-) -> ctk.CTkFont:
-    if master is not None:
-        prime_monospace_font(master)
-    family = _cached_mono_family or "Consolas"
-    return ctk.CTkFont(family=family, size=size, weight=weight)
-
-
-def monospace_tk_tuple(master, size: int = 13) -> tuple[str, int]:
-    """For ttk/tk widgets that need (family, size)."""
-    prime_monospace_font(master)
-    return (_cached_mono_family or "Consolas", size)

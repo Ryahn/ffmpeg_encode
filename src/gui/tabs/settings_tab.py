@@ -1,605 +1,252 @@
-"""Settings tab for configuration"""
+"""Settings tab (PyQt6)."""
 
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
+from __future__ import annotations
+
+import shutil
 from pathlib import Path
 
-from ..theme import APP_BLUE_LIGHT, APP_TEXT_DIM
-from utils.config import config
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+    QButtonGroup,
+)
+
 from core.package_manager import PackageManager
+from utils.config import config
 
 
-class SettingsTab(ctk.CTkFrame):
-    """Tab for application settings"""
-    
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        
+class SettingsTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.package_manager = PackageManager()
-        
-        # Create scrollable frame
-        scrollable = ctk.CTkScrollableFrame(self)
-        scrollable.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Path settings section
-        path_frame = ctk.CTkFrame(scrollable)
-        path_frame.pack(fill="x", pady=10)
-        
-        path_header = ctk.CTkFrame(path_frame)
-        path_header.pack(anchor="w", padx=10, pady=10, fill="x")
-        
-        ctk.CTkLabel(
-            path_header,
-            text="Executable Paths",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(side="left", padx=5)
-        
-        self._create_help_icon(
-            path_header,
-            "Paths to FFmpeg, HandBrake CLI, and mkvinfo executables.\n"
-            "Use 'Auto-detect' to find them automatically, or 'Browse' to select manually.\n"
-            "If not found, the application can install them via Chocolatey (Windows) or Homebrew (Mac)."
-        )
-        
-        # FFmpeg path
-        self.ffmpeg_entry = self._create_path_setting(
-            path_frame,
-            "FFmpeg:",
-            config.get_ffmpeg_path(),
-            self._browse_ffmpeg,
-            self._auto_detect_ffmpeg,
-            "Path to the FFmpeg executable.\n"
-            "FFmpeg is used for encoding videos when using the FFmpeg tab.\n"
-            "If not found, can be installed via Chocolatey (Windows) or Homebrew (Mac)."
-        )
-        self.ffmpeg_entry.bind("<FocusOut>", lambda e: self._on_ffmpeg_path_changed())
-        
-        # HandBrake path
-        self.handbrake_entry = self._create_path_setting(
-            path_frame,
-            "HandBrake CLI:",
-            config.get_handbrake_path(),
-            self._browse_handbrake,
-            self._auto_detect_handbrake,
-            "Path to the HandBrake CLI executable (HandBrakeCLI.exe on Windows).\n"
-            "HandBrake is used for encoding videos when using the HandBrake tab.\n"
-            "If not found, can be installed via Chocolatey (Windows) or Homebrew (Mac)."
-        )
-        self.handbrake_entry.bind("<FocusOut>", lambda e: self._on_handbrake_path_changed())
-        
-        # mkvinfo path
-        self.mkvinfo_entry = self._create_path_setting(
-            path_frame,
-            "mkvinfo:",
-            config.get_mkvinfo_path(),
-            self._browse_mkvinfo,
-            self._auto_detect_mkvinfo,
-            "Path to the mkvinfo executable (part of MKVToolNix).\n"
-            "mkvinfo is used to analyze MKV files and detect audio/subtitle tracks.\n"
-            "If not found, can be installed via Chocolatey (Windows) or Homebrew (Mac)."
-        )
-        self.mkvinfo_entry.bind("<FocusOut>", lambda e: self._on_mkvinfo_path_changed())
 
-        # MediaInfo path
-        self.mediainfo_entry = self._create_path_setting(
-            path_frame,
-            "MediaInfo:",
-            config.get_mediainfo_path(),
-            self._browse_mediainfo,
-            self._auto_detect_mediainfo,
-            "Path to the MediaInfo executable.\n"
-            "Used in the Debug tab to dump media info. If not set, the app will look for mediainfo on PATH."
-        )
-        self.mediainfo_entry.bind("<FocusOut>", lambda e: self._on_mediainfo_path_changed())
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        scroll.setWidget(inner)
+        root = QVBoxLayout(inner)
 
-        # Output settings section
-        output_frame = ctk.CTkFrame(scrollable)
-        output_frame.pack(fill="x", pady=10)
-        
-        output_header = ctk.CTkFrame(output_frame)
-        output_header.pack(anchor="w", padx=10, pady=10, fill="x")
-        
-        ctk.CTkLabel(
-            output_header,
-            text="Output Settings",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(side="left", padx=5)
-        
-        self._create_help_icon(
-            output_header,
-            "Default suffix added to output filenames.\n"
-            "Example: If source is 'video.mkv' and suffix is '_encoded',\n"
-            "the output will be 'video_encoded.mp4'."
-        )
-        
-        # Default output suffix
-        suffix_frame = ctk.CTkFrame(output_frame)
-        suffix_frame.pack(fill="x", padx=10, pady=5)
-        
-        ctk.CTkLabel(suffix_frame, text="Default Output Suffix:").pack(side="left", padx=5)
-        self.suffix_entry = ctk.CTkEntry(suffix_frame, width=200)
-        self.suffix_entry.insert(0, config.get_default_output_suffix())
-        self.suffix_entry.pack(side="left", padx=5)
-        self.suffix_entry.bind("<KeyRelease>", self._on_suffix_changed)
-        
-        # Encoding settings section
-        encoding_frame = ctk.CTkFrame(scrollable)
-        encoding_frame.pack(fill="x", pady=10)
-        
-        encoding_header = ctk.CTkFrame(encoding_frame)
-        encoding_header.pack(anchor="w", padx=10, pady=10, fill="x")
-        
-        ctk.CTkLabel(
-            encoding_header,
-            text="Encoding Settings",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(side="left", padx=5)
-        
-        self._create_help_icon(
-            encoding_header,
-            "Encoding mode:\n"
-            "- Sequential: Encode one file at a time\n"
-            "- Parallel: Encode multiple files simultaneously\n\n"
-            "Skip existing: Skip files that already have encoded versions."
-        )
-        
-        # Encoding mode
-        mode_frame = ctk.CTkFrame(encoding_frame)
-        mode_frame.pack(fill="x", padx=10, pady=5)
-        
-        ctk.CTkLabel(mode_frame, text="Default Encoding Mode:").pack(side="left", padx=5)
-        self.mode_var = ctk.StringVar(value=config.get_encoding_mode())
-        ctk.CTkRadioButton(
-            mode_frame,
-            text="Sequential",
-            variable=self.mode_var,
-            value="sequential",
-            command=self._on_mode_changed
-        ).pack(side="left", padx=5)
-        ctk.CTkRadioButton(
-            mode_frame,
-            text="Parallel",
-            variable=self.mode_var,
-            value="parallel",
-            command=self._on_mode_changed
-        ).pack(side="left", padx=5)
-        
-        # Skip existing
-        skip_frame = ctk.CTkFrame(encoding_frame)
-        skip_frame.pack(fill="x", padx=10, pady=5)
-        
-        self.skip_var = ctk.BooleanVar(value=config.get_skip_existing())
-        ctk.CTkCheckBox(
-            skip_frame,
-            text="Skip existing encoded files by default",
-            variable=self.skip_var,
-            command=self._on_skip_changed
-        ).pack(anchor="w")
+        root.addWidget(self._paths_group())
+        root.addWidget(self._output_group())
+        root.addWidget(self._encoding_group())
+        root.addWidget(self._track_group())
+        root.addStretch()
 
-        debug_frame = ctk.CTkFrame(encoding_frame)
-        debug_frame.pack(fill="x", padx=10, pady=5)
-        self.debug_var = ctk.BooleanVar(value=config.get_debug_logging())
-        ctk.CTkCheckBox(
-            debug_frame,
-            text="Enable debug logging",
-            variable=self.debug_var,
-            command=self._on_debug_logging_changed
-        ).pack(anchor="w")
+        lay = QVBoxLayout(self)
+        lay.addWidget(scroll)
+        lay.addWidget(QLabel("Settings save automatically when changed."))
+        lay.addWidget(self._btn("Save All Settings", self._save_all))
 
-        normalize_frame = ctk.CTkFrame(encoding_frame)
-        normalize_frame.pack(fill="x", padx=10, pady=5)
-        self._create_help_icon(
-            normalize_frame,
-            "FFmpeg tab only. When enabled, preset-generated commands include single-pass "
-            "integrated loudnorm (EBU R128-style targets: I=-16 LUFS, TP=-1.5 dBTP, LRA=11 by default). "
-            "This is not full two-pass broadcast loudness. Audio is still re-encoded per your preset.\n\n"
-            "After changing this option, click Reset on the FFmpeg tab (or reload the preset) to refresh "
-            "the command text if you rely on the auto-generated command. Saved or hand-edited commands "
-            "are not modified automatically—add -af yourself or reload from preset.",
-        )
-        self.audio_normalize_switch = ctk.CTkSwitch(
-            normalize_frame,
-            text="Apply loudness normalization to audio (FFmpeg, single-pass loudnorm)",
-            command=self._on_audio_normalize_changed,
-        )
-        self.audio_normalize_switch.pack(side="left", padx=10, pady=10)
-        if config.get_audio_normalize_enabled():
-            self.audio_normalize_switch.select()
-        else:
-            self.audio_normalize_switch.deselect()
-        
-        # Track detection settings section
-        track_frame = ctk.CTkFrame(scrollable)
-        track_frame.pack(fill="x", pady=10)
-        
-        track_header = ctk.CTkFrame(track_frame)
-        track_header.pack(anchor="w", padx=10, pady=10, fill="x")
-        
-        ctk.CTkLabel(
-            track_header,
-            text="Track Detection Settings",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(side="left", padx=5)
-        
-        self._create_help_icon(
-            track_header,
-            "Configure how the application detects audio and subtitle tracks.\n\n"
-            "Language Tags: Language codes to match (e.g., 'en', 'eng')\n"
-            "Name Patterns: Regex patterns to match in track names (comma-separated)\n"
-            "Exclude Patterns: Patterns to exclude (e.g., 'Japanese' to skip Japanese tracks)\n\n"
-            "Use the Debug tab to see what tracks are found and why they're selected."
-        )
+    def _btn(self, t, fn):
+        b = QPushButton(t)
+        b.clicked.connect(fn)
+        return b
 
-        # Allow Japanese audio with English subs (when no English audio track)
-        allow_ja_frame = ctk.CTkFrame(track_frame)
-        allow_ja_frame.pack(fill="x", padx=10, pady=5)
-        self._create_help_icon(
-            allow_ja_frame,
-            "When enabled, files with no English audio track will still be encoded using the first "
-            "audio track (e.g. Japanese) and English subtitles (Signs & Songs or first English sub). "
-            "Useful for anime that is Japanese-only with English subs."
-        )
-        self.allow_japanese_subs_switch = ctk.CTkSwitch(
-            allow_ja_frame,
-            text="Encode Japanese audio with English subs (when no English audio found)",
-            command=self._on_allow_japanese_subs_changed
-        )
-        self.allow_japanese_subs_switch.pack(side="left", padx=10, pady=10)
-        if config.get_allow_japanese_audio_with_english_subs():
-            self.allow_japanese_subs_switch.select()
-        else:
-            self.allow_japanese_subs_switch.deselect()
+    def _path_row(self, label: str, value: str, browse, auto):
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        e = QLineEdit(value)
+        h.addWidget(e, stretch=1)
+        h.addWidget(self._btn("Browse", lambda: browse(e)))
+        h.addWidget(self._btn("Auto-detect", lambda: auto(e)))
+        return w, e
 
-        # Audio language tags
-        self._create_list_setting(
-            track_frame,
-            "Audio Language Tags:",
-            config.get_audio_language_tags(),
-            self._on_audio_lang_tags_changed,
-            "Language codes to match for English audio tracks.\n"
-            "Comma-separated list (e.g., 'en, eng').\n"
-            "Matches if the track's language tag equals or starts with these values."
+    def _paths_group(self) -> QGroupBox:
+        g = QGroupBox("Executable Paths")
+        f = QFormLayout(g)
+        w1, self.ffmpeg_entry = self._path_row(
+            "FFmpeg", config.get_ffmpeg_path() or "", self._browse_ffmpeg, self._auto_ffmpeg
         )
-        
-        # Audio name patterns
-        self._create_list_setting(
-            track_frame,
-            "Audio Name Patterns:",
-            config.get_audio_name_patterns(),
-            self._on_audio_name_patterns_changed,
-            "Regex patterns to match in audio track names.\n"
-            "Comma-separated list (e.g., 'English, ENG').\n"
-            "If a track name matches any pattern, it's considered English (unless excluded)."
+        f.addRow("FFmpeg:", w1)
+        w2, self.handbrake_entry = self._path_row(
+            "HandBrake", config.get_handbrake_path() or "", self._browse_hb, self._auto_hb
         )
-        
-        # Audio exclude patterns
-        self._create_list_setting(
-            track_frame,
-            "Audio Exclude Patterns:",
-            config.get_audio_exclude_patterns(),
-            self._on_audio_exclude_patterns_changed,
-            "Patterns to exclude from audio track selection.\n"
-            "Comma-separated list (e.g., 'Japanese, JPN, 日本語').\n"
-            "Tracks matching these patterns will be skipped even if they match language/name patterns."
+        f.addRow("HandBrake CLI:", w2)
+        w3, self.mkvinfo_entry = self._path_row(
+            "mkvinfo", config.get_mkvinfo_path() or "", self._browse_mkv, self._auto_mkv
         )
-        
-        # Subtitle language tags
-        self._create_list_setting(
-            track_frame,
-            "Subtitle Language Tags:",
-            config.get_subtitle_language_tags(),
-            self._on_subtitle_lang_tags_changed,
-            "Language codes to match for English subtitle tracks.\n"
-            "Comma-separated list (e.g., 'en, eng').\n"
-            "Matches if the track's language tag equals or starts with these values."
+        f.addRow("mkvinfo:", w3)
+        w4, self.mediainfo_entry = self._path_row(
+            "MediaInfo", config.get_mediainfo_path() or "", self._browse_mi, self._auto_mi
         )
-        
-        # Subtitle name patterns
-        self._create_list_setting(
-            track_frame,
-            "Subtitle Name Patterns:",
-            config.get_subtitle_name_patterns(),
-            self._on_subtitle_name_patterns_changed,
-            "Regex patterns to match in subtitle track names for 'Signs & Songs' detection.\n"
-            "Comma-separated list (e.g., 'Signs.*Song, Signs$, English Signs').\n"
-            "These are regex patterns, so use '.*' for 'any characters' and '$' for 'end of string'."
+        f.addRow("MediaInfo:", w4)
+        self.ffmpeg_entry.editingFinished.connect(lambda: config.set_ffmpeg_path(self.ffmpeg_entry.text().strip()))
+        self.handbrake_entry.editingFinished.connect(
+            lambda: config.set_handbrake_path(self.handbrake_entry.text().strip())
         )
-        
-        # Subtitle exclude patterns
-        self._create_list_setting(
-            track_frame,
-            "Subtitle Exclude Patterns:",
-            config.get_subtitle_exclude_patterns(),
-            self._on_subtitle_exclude_patterns_changed,
-            "Patterns to exclude from subtitle track selection.\n"
-            "Comma-separated list (e.g., 'Japanese, JPN, 日本語').\n"
-            "Tracks matching these patterns will be skipped even if they match language/name patterns."
+        self.mkvinfo_entry.editingFinished.connect(lambda: config.set_mkvinfo_path(self.mkvinfo_entry.text().strip()))
+        self.mediainfo_entry.editingFinished.connect(
+            lambda: config.set_mediainfo_path(self.mediainfo_entry.text().strip())
         )
-        
-        # Save button at the bottom
-        save_frame = ctk.CTkFrame(scrollable)
-        save_frame.pack(fill="x", pady=20)
-        
-        save_info = ctk.CTkLabel(
-            save_frame,
-            text="Settings are automatically saved when changed. Use 'Save All' to explicitly save all current values.",
-            font=ctk.CTkFont(size=12),
-            text_color=APP_TEXT_DIM,
-        )
-        save_info.pack(pady=10)
-        
-        save_button = ctk.CTkButton(
-            save_frame,
-            text="Save All Settings",
-            command=self._save_all_settings,
-            width=150,
-            height=35
-        )
-        save_button.pack(pady=10)
-    
-    def _create_help_icon(self, parent, help_text: str):
-        """Create a help icon with tooltip"""
-        help_label = ctk.CTkLabel(
-            parent,
-            text="?",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color=APP_TEXT_DIM,
-            cursor="hand2",
-            width=20
-        )
-        help_label.pack(side="left", padx=5)
-        
-        def show_help(event=None):
-            messagebox.showinfo("Help", help_text)
-        
-        help_label.bind("<Button-1>", show_help)
-        help_label.bind("<Enter>", lambda e: help_label.configure(text_color=APP_BLUE_LIGHT))
-        help_label.bind("<Leave>", lambda e: help_label.configure(text_color=APP_TEXT_DIM))
-        
-        return help_label
-    
-    def _create_path_setting(self, parent, label, value, browse_cmd, auto_detect_cmd, help_text: str = None):
-        """Create a path setting row"""
-        frame = ctk.CTkFrame(parent)
-        frame.pack(fill="x", padx=10, pady=5)
-        
-        label_frame = ctk.CTkFrame(frame)
-        label_frame.pack(side="left", padx=5)
-        
-        ctk.CTkLabel(label_frame, text=label, width=120).pack(side="left", padx=5)
-        
-        if help_text:
-            self._create_help_icon(label_frame, help_text)
-        
-        entry = ctk.CTkEntry(frame, width=400)
-        entry.insert(0, value)
-        entry.pack(side="left", padx=5, fill="x", expand=True)
-        
-        ctk.CTkButton(
-            frame,
-            text="Browse",
-            command=lambda: browse_cmd(entry),
-            width=80
-        ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            frame,
-            text="Auto-detect",
-            command=lambda: auto_detect_cmd(entry),
-            width=100
-        ).pack(side="left", padx=5)
-        
-        return entry
-    
-    def _browse_ffmpeg(self, entry):
-        """Browse for FFmpeg executable"""
-        file = filedialog.askopenfilename(
-            title="Select FFmpeg executable",
-            filetypes=[("Executable", "*.exe"), ("All files", "*.*")]
-        )
-        if file:
-            entry.delete(0, "end")
-            entry.insert(0, file)
-            config.set_ffmpeg_path(file)
-    
-    def _browse_handbrake(self, entry):
-        """Browse for HandBrake executable"""
-        file = filedialog.askopenfilename(
-            title="Select HandBrake CLI executable",
-            filetypes=[("Executable", "*.exe"), ("All files", "*.*")]
-        )
-        if file:
-            entry.delete(0, "end")
-            entry.insert(0, file)
-            config.set_handbrake_path(file)
-    
-    def _browse_mkvinfo(self, entry):
-        """Browse for mkvinfo executable"""
-        file = filedialog.askopenfilename(
-            title="Select mkvinfo executable",
-            filetypes=[("Executable", "*.exe"), ("All files", "*.*")]
-        )
-        if file:
-            entry.delete(0, "end")
-            entry.insert(0, file)
-            config.set_mkvinfo_path(file)
-    
-    def _auto_detect_ffmpeg(self, entry):
-        """Auto-detect FFmpeg"""
-        found, path = self.package_manager.check_ffmpeg()
-        if found:
-            entry.delete(0, "end")
-            entry.insert(0, path)
+        return g
+
+    def _browse_ffmpeg(self, e):
+        p, _ = QFileDialog.getOpenFileName(self, "FFmpeg", "", "Executable (*.exe);;All (*.*)")
+        if p:
+            e.setText(p)
+            config.set_ffmpeg_path(p)
+
+    def _browse_hb(self, e):
+        p, _ = QFileDialog.getOpenFileName(self, "HandBrake CLI", "", "Executable (*.exe);;All (*.*)")
+        if p:
+            e.setText(p)
+            config.set_handbrake_path(p)
+
+    def _browse_mkv(self, e):
+        p, _ = QFileDialog.getOpenFileName(self, "mkvinfo", "", "Executable (*.exe);;All (*.*)")
+        if p:
+            e.setText(p)
+            config.set_mkvinfo_path(p)
+
+    def _browse_mi(self, e):
+        p, _ = QFileDialog.getOpenFileName(self, "MediaInfo", "", "Executable (*.exe);;All (*.*)")
+        if p:
+            e.setText(p)
+            config.set_mediainfo_path(p)
+
+    def _auto_ffmpeg(self, e):
+        ok, path = self.package_manager.check_ffmpeg()
+        if ok:
+            e.setText(path)
             config.set_ffmpeg_path(path)
         else:
-            from tkinter import messagebox
-            messagebox.showinfo("Not Found", "FFmpeg not found. Would you like to install it?")
-            # TODO: Offer to install
-    
-    def _auto_detect_handbrake(self, entry):
-        """Auto-detect HandBrake"""
-        found, path = self.package_manager.check_handbrake()
-        if found:
-            entry.delete(0, "end")
-            entry.insert(0, path)
+            QMessageBox.information(self, "Not found", "FFmpeg not found on PATH.")
+
+    def _auto_hb(self, e):
+        ok, path = self.package_manager.check_handbrake()
+        if ok:
+            e.setText(path)
             config.set_handbrake_path(path)
         else:
-            from tkinter import messagebox
-            messagebox.showinfo("Not Found", "HandBrake CLI not found. Would you like to install it?")
-            # TODO: Offer to install
-    
-    def _auto_detect_mkvinfo(self, entry):
-        """Auto-detect mkvinfo"""
-        found, path = self.package_manager.check_mkvinfo()
-        if found:
-            entry.delete(0, "end")
-            entry.insert(0, path)
+            QMessageBox.information(self, "Not found", "HandBrake CLI not found.")
+
+    def _auto_mkv(self, e):
+        ok, path = self.package_manager.check_mkvinfo()
+        if ok:
+            e.setText(path)
             config.set_mkvinfo_path(path)
         else:
-            from tkinter import messagebox
-            messagebox.showinfo("Not Found", "mkvinfo not found. Would you like to install it?")
-            # TODO: Offer to install
+            QMessageBox.information(self, "Not found", "mkvinfo not found.")
 
-    def _browse_mediainfo(self, entry):
-        """Browse for MediaInfo executable"""
-        file = filedialog.askopenfilename(
-            title="Select MediaInfo executable",
-            filetypes=[("Executable", "*.exe"), ("All files", "*.*")]
-        )
-        if file:
-            entry.delete(0, "end")
-            entry.insert(0, file)
-            config.set_mediainfo_path(file)
-
-    def _auto_detect_mediainfo(self, entry):
-        """Auto-detect MediaInfo from PATH or common locations"""
-        import shutil
-        path = config.get_mediainfo_path()
-        if path and Path(path).exists():
-            return
-        path = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
-        if path:
-            entry.delete(0, "end")
-            entry.insert(0, path)
-            config.set_mediainfo_path(path)
+    def _auto_mi(self, e):
+        p = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
+        if p:
+            e.setText(p)
+            config.set_mediainfo_path(p)
         else:
-            from tkinter import messagebox
-            messagebox.showinfo("Not Found", "MediaInfo not found on PATH. Set the path manually or install MediaInfo.")
+            QMessageBox.information(self, "Not found", "MediaInfo not on PATH.")
 
-    def _on_suffix_changed(self, event=None):
-        """Handle suffix change"""
-        suffix = self.suffix_entry.get()
-        config.set_default_output_suffix(suffix)
-    
-    def _on_mode_changed(self):
-        """Handle encoding mode change"""
-        mode = self.mode_var.get()
-        config.set_encoding_mode(mode)
-    
-    def _on_skip_changed(self):
-        """Handle skip existing change"""
-        value = self.skip_var.get()
-        config.set_skip_existing(value)
+    def _output_group(self) -> QGroupBox:
+        g = QGroupBox("Output Settings")
+        f = QFormLayout(g)
+        self.suffix_entry = QLineEdit(config.get_default_output_suffix())
+        self.suffix_entry.textChanged.connect(lambda t: config.set_default_output_suffix(t))
+        f.addRow("Default output suffix:", self.suffix_entry)
+        return g
 
-    def _on_debug_logging_changed(self):
-        """Handle enable debug logging change"""
-        config.set_debug_logging(self.debug_var.get())
+    def _encoding_group(self) -> QGroupBox:
+        g = QGroupBox("Encoding")
+        v = QVBoxLayout(g)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Default encoding mode:"))
+        self._mode_grp = QButtonGroup(self)
+        self._m_seq = QRadioButton("Sequential")
+        self._m_par = QRadioButton("Parallel")
+        self._mode_grp.addButton(self._m_seq)
+        self._mode_grp.addButton(self._m_par)
+        if config.get_encoding_mode() == "parallel":
+            self._m_par.setChecked(True)
+        else:
+            self._m_seq.setChecked(True)
+        self._m_seq.toggled.connect(self._persist_mode)
+        mode_row.addWidget(self._m_seq)
+        mode_row.addWidget(self._m_par)
+        v.addLayout(mode_row)
+        self.skip_cb = QCheckBox("Skip existing encoded files by default")
+        self.skip_cb.setChecked(config.get_skip_existing())
+        self.skip_cb.toggled.connect(lambda x: config.set_skip_existing(x))
+        v.addWidget(self.skip_cb)
+        self.debug_cb = QCheckBox("Enable debug logging")
+        self.debug_cb.setChecked(config.get_debug_logging())
+        self.debug_cb.toggled.connect(lambda x: config.set_debug_logging(x))
+        v.addWidget(self.debug_cb)
+        self.norm_cb = QCheckBox("Apply loudness normalization (FFmpeg single-pass loudnorm)")
+        self.norm_cb.setChecked(config.get_audio_normalize_enabled())
+        self.norm_cb.toggled.connect(lambda x: config.set_audio_normalize_enabled(x))
+        v.addWidget(self.norm_cb)
+        return g
 
-    def _on_audio_normalize_changed(self):
-        """Handle FFmpeg single-pass loudnorm toggle"""
-        config.set_audio_normalize_enabled(bool(self.audio_normalize_switch.get()))
-    
-    def _create_list_setting(self, parent, label, value_list, callback, help_text: str = None):
-        """Create a list setting row (comma-separated)"""
-        frame = ctk.CTkFrame(parent)
-        frame.pack(fill="x", padx=10, pady=5)
-        
-        label_frame = ctk.CTkFrame(frame)
-        label_frame.pack(side="left", padx=5)
-        
-        ctk.CTkLabel(label_frame, text=label, width=200).pack(side="left", padx=5)
-        
-        if help_text:
-            self._create_help_icon(label_frame, help_text)
-        
-        entry = ctk.CTkEntry(frame, width=500)
-        entry.insert(0, ", ".join(value_list))
-        entry.pack(side="left", padx=5, fill="x", expand=True)
-        entry.bind("<KeyRelease>", lambda e, cb=callback: cb(entry.get()))
-        
-        return entry
-    
-    def _on_audio_lang_tags_changed(self, value: str):
-        """Handle audio language tags change"""
-        tags = [tag.strip() for tag in value.split(",") if tag.strip()]
-        config.set_audio_language_tags(tags)
-    
-    def _on_audio_name_patterns_changed(self, value: str):
-        """Handle audio name patterns change"""
-        patterns = [p.strip() for p in value.split(",") if p.strip()]
-        config.set_audio_name_patterns(patterns)
-    
-    def _on_audio_exclude_patterns_changed(self, value: str):
-        """Handle audio exclude patterns change"""
-        patterns = [p.strip() for p in value.split(",") if p.strip()]
-        config.set_audio_exclude_patterns(patterns)
-    
-    def _on_subtitle_lang_tags_changed(self, value: str):
-        """Handle subtitle language tags change"""
-        tags = [tag.strip() for tag in value.split(",") if tag.strip()]
-        config.set_subtitle_language_tags(tags)
-    
-    def _on_subtitle_name_patterns_changed(self, value: str):
-        """Handle subtitle name patterns change"""
-        patterns = [p.strip() for p in value.split(",") if p.strip()]
-        config.set_subtitle_name_patterns(patterns)
-    
-    def _on_subtitle_exclude_patterns_changed(self, value: str):
-        """Handle subtitle exclude patterns change"""
-        patterns = [p.strip() for p in value.split(",") if p.strip()]
-        config.set_subtitle_exclude_patterns(patterns)
+    def _persist_mode(self) -> None:
+        config.set_encoding_mode("parallel" if self._m_par.isChecked() else "sequential")
 
-    def _on_allow_japanese_subs_changed(self):
-        """Handle allow Japanese audio with English subs toggle"""
-        config.set_allow_japanese_audio_with_english_subs(self.allow_japanese_subs_switch.get())
+    def _track_group(self) -> QGroupBox:
+        g = QGroupBox("Track detection")
+        f = QFormLayout(g)
+        self.ja_cb = QCheckBox("Encode Japanese audio with English subs when no English audio")
+        self.ja_cb.setChecked(config.get_allow_japanese_audio_with_english_subs())
+        self.ja_cb.toggled.connect(lambda x: config.set_allow_japanese_audio_with_english_subs(x))
+        f.addRow(self.ja_cb)
+        self.audio_lang = QLineEdit(", ".join(config.get_audio_language_tags()))
+        self.audio_lang.textChanged.connect(self._save_audio_lang)
+        f.addRow("Audio language tags:", self.audio_lang)
+        self.audio_name = QLineEdit(", ".join(config.get_audio_name_patterns()))
+        self.audio_name.textChanged.connect(self._save_audio_name)
+        f.addRow("Audio name patterns:", self.audio_name)
+        self.audio_ex = QLineEdit(", ".join(config.get_audio_exclude_patterns()))
+        self.audio_ex.textChanged.connect(self._save_audio_ex)
+        f.addRow("Audio exclude patterns:", self.audio_ex)
+        self.sub_lang = QLineEdit(", ".join(config.get_subtitle_language_tags()))
+        self.sub_lang.textChanged.connect(self._save_sub_lang)
+        f.addRow("Subtitle language tags:", self.sub_lang)
+        self.sub_name = QLineEdit(", ".join(config.get_subtitle_name_patterns()))
+        self.sub_name.textChanged.connect(self._save_sub_name)
+        f.addRow("Subtitle name patterns:", self.sub_name)
+        self.sub_ex = QLineEdit(", ".join(config.get_subtitle_exclude_patterns()))
+        self.sub_ex.textChanged.connect(self._save_sub_ex)
+        f.addRow("Subtitle exclude patterns:", self.sub_ex)
+        return g
 
-    def _on_ffmpeg_path_changed(self):
-        """Handle FFmpeg path change (when entry loses focus)"""
-        path = self.ffmpeg_entry.get().strip()
-        config.set_ffmpeg_path(path)
-    
-    def _on_handbrake_path_changed(self):
-        """Handle HandBrake path change (when entry loses focus)"""
-        path = self.handbrake_entry.get().strip()
-        config.set_handbrake_path(path)
-    
-    def _on_mkvinfo_path_changed(self):
-        """Handle mkvinfo path change (when entry loses focus)"""
-        path = self.mkvinfo_entry.get().strip()
-        config.set_mkvinfo_path(path)
+    def _save_audio_lang(self, t: str) -> None:
+        config.set_audio_language_tags([x.strip() for x in t.split(",") if x.strip()])
 
-    def _on_mediainfo_path_changed(self):
-        """Handle MediaInfo path change (when entry loses focus)"""
-        path = self.mediainfo_entry.get().strip()
-        config.set_mediainfo_path(path)
+    def _save_audio_name(self, t: str) -> None:
+        config.set_audio_name_patterns([x.strip() for x in t.split(",") if x.strip()])
 
-    def _save_all_settings(self):
-        """Explicitly save all current settings"""
+    def _save_audio_ex(self, t: str) -> None:
+        config.set_audio_exclude_patterns([x.strip() for x in t.split(",") if x.strip()])
+
+    def _save_sub_lang(self, t: str) -> None:
+        config.set_subtitle_language_tags([x.strip() for x in t.split(",") if x.strip()])
+
+    def _save_sub_name(self, t: str) -> None:
+        config.set_subtitle_name_patterns([x.strip() for x in t.split(",") if x.strip()])
+
+    def _save_sub_ex(self, t: str) -> None:
+        config.set_subtitle_exclude_patterns([x.strip() for x in t.split(",") if x.strip()])
+
+    def _save_all(self) -> None:
         try:
-            # Save path entries
-            config.set_ffmpeg_path(self.ffmpeg_entry.get().strip())
-            config.set_handbrake_path(self.handbrake_entry.get().strip())
-            config.set_mkvinfo_path(self.mkvinfo_entry.get().strip())
-            config.set_mediainfo_path(self.mediainfo_entry.get().strip())
-
-            # Save other settings (these should already be saved automatically, but ensure they are)
-            config.set_default_output_suffix(self.suffix_entry.get())
-            config.set_encoding_mode(self.mode_var.get())
-            config.set_skip_existing(self.skip_var.get())
-            config.set_debug_logging(self.debug_var.get())
-            config.set_audio_normalize_enabled(bool(self.audio_normalize_switch.get()))
-            
-            messagebox.showinfo("Settings Saved", "All settings have been saved successfully!")
+            config.set_ffmpeg_path(self.ffmpeg_entry.text().strip())
+            config.set_handbrake_path(self.handbrake_entry.text().strip())
+            config.set_mkvinfo_path(self.mkvinfo_entry.text().strip())
+            config.set_mediainfo_path(self.mediainfo_entry.text().strip())
+            config.set_default_output_suffix(self.suffix_entry.text())
+            config.set_encoding_mode("parallel" if self._m_par.isChecked() else "sequential")
+            config.set_skip_existing(self.skip_cb.isChecked())
+            config.set_debug_logging(self.debug_cb.isChecked())
+            config.set_audio_normalize_enabled(self.norm_cb.isChecked())
+            QMessageBox.information(self, "Saved", "All settings saved.")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save settings: {str(e)}")
-
+            QMessageBox.critical(self, "Error", str(e))

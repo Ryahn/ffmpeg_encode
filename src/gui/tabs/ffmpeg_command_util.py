@@ -1,0 +1,210 @@
+"""FFmpeg command preview and parsing (GUI-framework agnostic)."""
+
+from __future__ import annotations
+
+import re
+import shlex
+import tempfile
+from pathlib import Path
+from typing import Callable, List, Optional
+
+from core.ffmpeg_translator import _escape_ffmpeg_filter_path
+from utils.config import config
+
+
+def generate_command_preview(
+    command_template: str,
+    get_files_callback: Optional[Callable],
+    get_output_path_callback: Optional[Callable],
+    suffix: str,
+    track_analyzer,
+) -> str:
+    if not command_template.strip():
+        return "No command entered - load a preset or enter a command to see preview"
+    files = []
+    if get_files_callback:
+        files = get_files_callback()
+    if not files:
+        return "No files available - add files to see preview with actual file paths"
+    first_file_data = files[0]
+    source_file = Path(first_file_data["path"])
+    if get_output_path_callback:
+        output_dir = get_output_path_callback(source_file)
+    else:
+        output_dir = source_file.parent
+    output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
+    audio_track = first_file_data.get("audio_track")
+    subtitle_track = first_file_data.get("subtitle_track")
+    if audio_track is None and track_analyzer:
+        try:
+            tracks = track_analyzer.analyze_tracks(source_file)
+            if not tracks.get("error"):
+                audio_track = tracks.get("audio", 2)
+                subtitle_track = tracks.get("subtitle")
+        except Exception:
+            audio_track = 2
+            subtitle_track = None
+    if audio_track is None:
+        audio_track = 2
+    subtitle_file = None
+    if subtitle_track is not None:
+        subtitle_file = Path(tempfile.gettempdir()) / f"{source_file.stem}_subtitle.mkv"
+    command = command_template
+
+    def quote_path_if_needed(path_str: str) -> str:
+        if " " in path_str:
+            return f'"{path_str}"'
+        return path_str
+
+    input_file_str = str(source_file)
+    output_file_str = str(output_file)
+    input_file_quoted = quote_path_if_needed(input_file_str)
+    output_file_quoted = quote_path_if_needed(output_file_str)
+
+    def escape_for_replacement(path_str: str) -> str:
+        return path_str.replace("\\", "\\\\")
+
+    command = re.sub(r"\binput\.mkv\b", lambda m: input_file_quoted, command, flags=re.IGNORECASE)
+    command = re.sub(r"\{INPUT\}", lambda m: input_file_quoted, command)
+    command = re.sub(r"<INPUT>", lambda m: input_file_quoted, command)
+    command = re.sub(r"\boutput\.mp4\b", lambda m: output_file_quoted, command, flags=re.IGNORECASE)
+    command = re.sub(r"\{OUTPUT\}", lambda m: output_file_quoted, command)
+    command = re.sub(r"<OUTPUT>", lambda m: output_file_quoted, command)
+    command = re.sub(r"\{AUDIO_TRACK\}", str(audio_track), command)
+    command = re.sub(r"<AUDIO_TRACK>", str(audio_track), command)
+    audio_stream_id = audio_track - 1
+    command = re.sub(
+        r"(-map\s+0:v:0\s+)-map\s+0:\d+",
+        rf"\1-map 0:{audio_stream_id}",
+        command,
+    )
+    if subtitle_track is not None:
+        command = re.sub(r"\{SUBTITLE_TRACK\}", str(subtitle_track), command)
+        command = re.sub(r"<SUBTITLE_TRACK>", str(subtitle_track), command)
+    if subtitle_file:
+        sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
+        sub_path = sub_path.replace("'", "'\\''")
+        command = re.sub(r"\{SUBTITLE_FILE\}", lambda m: sub_path, command)
+        command = re.sub(r"<SUBTITLE_FILE>", lambda m: sub_path, command)
+    command = re.sub(r'"input\.mkv"', lambda m: input_file_quoted, command, flags=re.IGNORECASE)
+    command = re.sub(r'"output\.mp4"', lambda m: output_file_quoted, command, flags=re.IGNORECASE)
+    input_single_quoted = f"'{input_file_str}'"
+    output_single_quoted = f"'{output_file_str}'"
+    command = re.sub(r"'input\.mkv'", lambda m: input_single_quoted, command, flags=re.IGNORECASE)
+    command = re.sub(r"'output\.mp4'", lambda m: output_single_quoted, command, flags=re.IGNORECASE)
+    ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
+    if ffmpeg_path != "ffmpeg":
+        command = re.sub(r"\bffmpeg\b", lambda m: ffmpeg_path, command, flags=re.IGNORECASE)
+    return command
+
+
+def parse_and_substitute_command(
+    command_template: str,
+    input_file: Path,
+    output_file: Path,
+    audio_track: int,
+    subtitle_track: Optional[int],
+    subtitle_file: Optional[Path],
+    on_log: Callable[[str, str], None],
+) -> List[str]:
+    command = command_template
+    command = re.sub(r"(scale=[^,\s'\"]+):si=\d+", r"\1", command)
+
+    def escape_for_replacement(path_str: str) -> str:
+        return path_str.replace("\\", "\\\\")
+
+    def quote_path_if_needed(path_str: str) -> str:
+        if " " in path_str:
+            return f'"{path_str}"'
+        return path_str
+
+    input_file_str = str(input_file)
+    output_file_str = str(output_file)
+    input_file_quoted = quote_path_if_needed(input_file_str)
+    output_file_quoted = quote_path_if_needed(output_file_str)
+    input_file_escaped = escape_for_replacement(input_file_quoted)
+    output_file_escaped = escape_for_replacement(output_file_quoted)
+
+    command = re.sub(r"\binput\.mkv\b", input_file_escaped, command, flags=re.IGNORECASE)
+    command = re.sub(r"\{INPUT\}", input_file_escaped, command)
+    command = re.sub(r"<INPUT>", input_file_escaped, command)
+    command = re.sub(r"\boutput\.mp4\b", output_file_escaped, command, flags=re.IGNORECASE)
+    command = re.sub(r"\{OUTPUT\}", output_file_escaped, command)
+    command = re.sub(r"<OUTPUT>", output_file_escaped, command)
+    command = re.sub(r"\{AUDIO_TRACK\}", str(audio_track), command)
+    command = re.sub(r"<AUDIO_TRACK>", str(audio_track), command)
+    audio_stream_id = audio_track - 1
+    command = re.sub(
+        r"(-map\s+0:v:0\s+)-map\s+0:\d+",
+        rf"\1-map 0:{audio_stream_id}",
+        command,
+    )
+    if subtitle_track is not None:
+        command = re.sub(r"\{SUBTITLE_TRACK\}", str(subtitle_track), command)
+        command = re.sub(r"<SUBTITLE_TRACK>", str(subtitle_track), command)
+    if subtitle_file:
+        sub_path = _escape_ffmpeg_filter_path(str(subtitle_file))
+        command = re.sub(r"\{SUBTITLE_FILE\}", lambda m: sub_path, command)
+        command = re.sub(r"<SUBTITLE_FILE>", lambda m: sub_path, command)
+    else:
+        command = re.sub(
+            r",\s*subtitles=['\"](?:\{SUBTITLE_FILE\}|<SUBTITLE_FILE>)['\"]",
+            "",
+            command,
+        )
+        command = re.sub(
+            r"subtitles=['\"](?:\{SUBTITLE_FILE\}|<SUBTITLE_FILE>)['\"]\s*,",
+            "",
+            command,
+        )
+    if "input.mkv" in command.lower() or "output.mp4" in command.lower():
+        command = re.sub(r'"input\.mkv"', input_file_escaped, command, flags=re.IGNORECASE)
+        command = re.sub(r'"output\.mp4"', output_file_escaped, command, flags=re.IGNORECASE)
+        input_single_quoted = escape_for_replacement(f"'{input_file_str}'")
+        output_single_quoted = escape_for_replacement(f"'{output_file_str}'")
+        command = re.sub(r"'input\.mkv'", input_single_quoted, command, flags=re.IGNORECASE)
+        command = re.sub(r"'output\.mp4'", output_single_quoted, command, flags=re.IGNORECASE)
+
+    _remaining = re.findall(r"\{[A-Z_]+\}|<[A-Z_]+>", command)
+    if _remaining:
+        on_log(
+            "WARNING",
+            "Unresolved placeholder(s) in command — encoding may fail: "
+            + ", ".join(dict.fromkeys(_remaining)),
+        )
+
+    try:
+        args = shlex.split(command, posix=False)
+    except Exception as e:
+        on_log("WARNING", f"shlex.split() failed: {e}, using fallback parsing")
+        args = [arg.strip('"').strip("'") for arg in command.split()]
+
+    for i, arg in enumerate(args):
+        if arg == "-i" and i + 1 < len(args):
+            input_path = args[i + 1].strip('"').strip("'")
+            if not Path(input_path).exists():
+                on_log("ERROR", f"Input file does not exist: {input_path}")
+            args[i + 1] = input_path
+        elif arg == "-y" and i + 1 < len(args):
+            args[i + 1] = args[i + 1].strip('"').strip("'")
+        elif i == len(args) - 1 and (
+            arg.endswith(".mp4") or arg.endswith(".mkv") or arg.endswith(".avi")
+        ):
+            args[i] = arg.strip('"').strip("'")
+
+    if not args:
+        return []
+
+    ffmpeg_executable = (config.get_ffmpeg_path() or "").strip() or "ffmpeg"
+    first_name = Path(args[0]).name.lower()
+    configured_name = Path(ffmpeg_executable).name.lower()
+    allowed_first = {"ffmpeg", "ffmpeg.exe"}
+    if configured_name:
+        allowed_first.add(configured_name)
+    if first_name not in allowed_first:
+        raise ValueError(
+            "Command must start with ffmpeg or ffmpeg.exe, or the FFmpeg executable "
+            "configured in Settings (first argument was not recognized as FFmpeg)."
+        )
+    args[0] = ffmpeg_executable
+    return args

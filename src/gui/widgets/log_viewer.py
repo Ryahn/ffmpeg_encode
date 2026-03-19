@@ -1,61 +1,49 @@
-"""Log viewer widget"""
+"""Log viewer using QPlainTextEdit."""
 
-import customtkinter as ctk
-from typing import Optional
+from __future__ import annotations
+
+from PyQt6.QtGui import QTextCursor
+from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QVBoxLayout
 
 MAX_LINES = 5000
 
 
-class LogViewer(ctk.CTkTextbox):
-    """Real-time log viewer with color coding"""
+class LogViewer(QWidget):
+    """Append-only log view with optional copy."""
 
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        self.configure(state="disabled")
+    def __init__(self, parent: QWidget | None = None, height: int = 200):
+        super().__init__(parent)
+        self._text = QPlainTextEdit(self)
+        self._text.setReadOnly(True)
+        self._text.setFixedHeight(height)
+        self._text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._text)
 
-    def add_log(self, level: str, message: str):
-        """Add a log entry"""
-        self.configure(state="normal")
+    def add_log(self, level: str, message: str) -> None:
+        line = f"[{level}] {message}\n"
+        self._text.moveCursor(QTextCursor.MoveOperation.End)
+        self._text.insertPlainText(line)
+        doc = self._text.document()
+        if doc.blockCount() > MAX_LINES:
+            cursor = self._text.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            for _ in range(doc.blockCount() - MAX_LINES):
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.removeSelectedText()
+                cursor.deleteChar()
+        self._text.moveCursor(QTextCursor.MoveOperation.End)
 
-        formatted = f"[{level}] {message}\n"
-        self.insert("end", formatted)
+    def clear(self) -> None:
+        self._text.clear()
 
-        try:
-            end_index = self.index("end-1c")
-            line_num = int(end_index.split(".")[0])
-            if line_num > MAX_LINES:
-                drop_count = line_num - MAX_LINES
-                self.delete("1.0", f"{drop_count + 1}.0")
-        except (ValueError, IndexError):
-            pass
+    def copy_to_clipboard(self) -> None:
+        self._text.selectAll()
+        self._text.copy()
+        cur = self._text.textCursor()
+        cur.clearSelection()
+        self._text.setTextCursor(cur)
 
-        self.see("end")
-        self.configure(state="disabled")
-    
-    def clear(self):
-        """Clear all logs"""
-        self.configure(state="normal")
-        self.delete("1.0", "end")
-        self.configure(state="disabled")
-    
-    def export_logs(self, file_path: str):
-        """Export logs to file"""
-        try:
-            content = self.get("1.0", "end-1c")
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            return True
-        except Exception:
-            return False
-
-    def copy_to_clipboard(self):
-        """Copy log content to clipboard so user can paste (e.g. Ctrl+V)."""
-        try:
-            content = self.get("1.0", "end-1c")
-            if content.strip():
-                root = self.winfo_toplevel()
-                root.clipboard_clear()
-                root.clipboard_append(content)
-        except Exception:
-            pass
-
+    def plain_text(self) -> str:
+        return self._text.toPlainText()

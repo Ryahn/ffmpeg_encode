@@ -1,38 +1,36 @@
-"""Main entry point for the application"""
+"""Main entry point for the application (PyQt6)."""
 
 import sys
 from pathlib import Path
 
+from PyQt6.QtWidgets import QApplication
+
 from utils.config import config
 
-# Handle PyInstaller bundled executable
-if getattr(sys, 'frozen', False):
-    # Running as a bundled executable
+if getattr(sys, "frozen", False):
     base_path = sys._MEIPASS
 else:
-    # Running as a normal Python script
     base_path = str(Path(__file__).parent)
     sys.path.insert(0, base_path)
 
-import customtkinter as ctk
-
 from gui.main_window import MainWindow
-from gui.theme import apply_theme
+from gui.styles import get_stylesheet
 from utils.logger import logger
 
 
-def main():
-    """Main function"""
+def main() -> None:
     try:
-        logger.info("Starting Video Encoder GUI")
-        ctk.set_appearance_mode("dark")
-        apply_theme()
-        app = MainWindow()
-        app.run()
+        logger.info("Starting Video Encoder GUI (PyQt6)")
+        app = QApplication(sys.argv)
+        app.setStyleSheet(get_stylesheet())
+        window = MainWindow()
+        window.show()
+        code = app.exec()
+        sys.exit(code)
     except KeyboardInterrupt:
         logger.info("Application interrupted by user")
     except Exception as e:
-        logger.error(f"Application error: {str(e)}")
+        logger.error(f"Application error: {e}")
         raise
     finally:
         config.flush()
@@ -40,4 +38,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
