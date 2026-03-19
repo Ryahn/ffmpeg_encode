@@ -1,37 +1,80 @@
-"""FFmpeg encoding tab"""
+"""FFmpeg encoding tab (PyQt6).
 
-import customtkinter as ctk
-from tkinter import filedialog, messagebox
-from pathlib import Path
-from typing import Optional, Callable, List
+The encoder core supports **Stop** (terminate current process); there is no
+mid-encode pause/resume API in ``core.encoder`` to wire here.
+"""
+
+from __future__ import annotations
+
 import threading
-import tempfile
-import shlex
 import re
 import time
+from pathlib import Path
+from typing import Callable, List, Optional
 
-from ..theme import APP_LOG_WARN, APP_TEXT_CMD, APP_TEXT_DIM, APP_TEXT_PREVIEW, monospace_font
-from ..widgets.progress_bar import ProgressDisplay
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QDoubleSpinBox,
+    QFrame,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QRadioButton,
+    QScrollArea,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .ffmpeg_command_util import (
+    ffmpeg_preview_to_html,
+    generate_command_preview,
+    parse_and_substitute_command,
+)
 from ..widgets.log_viewer import LogViewer
-from ..widgets.toast import ToastManager
-from core.preset_parser import PresetParser
+from ..widgets.progress_bar import ProgressDisplay
+from core.audio_normalize import build_integrated_loudnorm_filter
+from core.batch_stats import BatchStats
 from core.encoder import Encoder, EncodingProgress, extract_subtitle_stream
+from core.ffmpeg_translator import FFmpegTranslator
+from core.notifications import BatchNotification
+from core.preset_parser import PresetParser
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import compute_effective_tracks
-from core.ffmpeg_translator import FFmpegTranslator, _escape_ffmpeg_filter_path
-from core.audio_normalize import build_integrated_loudnorm_filter
-from core.notifications import BatchNotification
-from core.batch_stats import BatchStats
 from utils.config import config
 from utils.logger import logger
 
 
-class FFmpegTab(ctk.CTkFrame):
-    """Tab for FFmpeg encoding"""
-    
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        
+class _FFmpegUiBridge(QObject):
+    log_msg = pyqtSignal(str, str)
+    progress = pyqtSignal(object)
+    reset_ui = pyqtSignal()
+    toast = pyqtSignal(str, str)
+    status_text = pyqtSignal(str)
+
+
+class FFmpegTab(QWidget):
+    _PLACEHOLDER_CHIP_STYLES = {
+        "{INPUT}": ("#1e3a52", "#7dd3fc", "#2a4a6a"),
+        "{OUTPUT}": ("#1a3d2e", "#4ade80", "#255238"),
+        "{AUDIO_TRACK}": ("#3d3020", "#f0a500", "#524018"),
+        "{SUBTITLE_TRACK}": ("#2d2640", "#c4b5fd", "#3d3558"),
+        "{SUBTITLE_FILE}": ("#3d1f40", "#f9a8d4", "#522840"),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_window = None
         self.preset_parser: Optional[PresetParser] = None
         self.ffmpeg_translator: Optional[FFmpegTranslator] = None
         self.encoder: Optional[Encoder] = None
@@ -39,338 +82,348 @@ class FFmpegTab(ctk.CTkFrame):
         self.encoding_thread: Optional[threading.Thread] = None
         self.is_encoding = False
         self.batch_stats: Optional[BatchStats] = None
-        self.toast_manager: Optional[object] = None
         self.get_files_callback: Optional[Callable] = None
         self.update_file_callback: Optional[Callable] = None
         self.get_output_path_callback: Optional[Callable] = None
         self._progress_ui_throttle_last: Optional[float] = None
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._update_command_preview_display)
+        self._last_preview_plain = ""
 
-        # Create scrollable frame for main content
-        scrollable = ctk.CTkScrollableFrame(self)
-        scrollable.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Top section - Preset selection
-        preset_frame = ctk.CTkFrame(scrollable)
-        preset_frame.pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(preset_frame, text="HandBrake Preset:").pack(side="left", padx=5)
-        
-        # Preset dropdown
-        self.preset_var = ctk.StringVar(value="")
-        self.preset_dropdown = ctk.CTkComboBox(
-            preset_frame,
-            variable=self.preset_var,
-            width=300,
-            command=self._on_preset_selected
+        self._bridge = _FFmpegUiBridge(self)
+
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        scroll.setWidget(inner)
+        root = QVBoxLayout(inner)
+
+        preset_gb = QGroupBox("HandBrake preset")
+        pr = QHBoxLayout(preset_gb)
+        pr.addWidget(QLabel("Saved preset:"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(280)
+        self.preset_combo.currentTextChanged.connect(self._on_preset_selected)
+        pr.addWidget(self.preset_combo)
+        pr.addWidget(self._btn("Load Preset", self._load_preset))
+        pr.addWidget(self._btn("Detect Tracks", self._detect_and_update_tracks))
+        root.addWidget(preset_gb)
+
+        cmd_gb = QGroupBox("FFmpeg command (editable)")
+        cmd_l = QVBoxLayout(cmd_gb)
+        self.cmd_text = QPlainTextEdit()
+        self.cmd_text.setMinimumHeight(90)
+        self.cmd_text.textChanged.connect(self._schedule_preview_update)
+        cmd_l.addWidget(self.cmd_text)
+        hb = QHBoxLayout()
+        for t, fn in [
+            ("Save", self._save_command),
+            ("Load", self._load_saved_command),
+            ("Load from File", self._load_command_from_file),
+            ("Save to File", self._save_command_to_file),
+            ("Reset", self._reset_command),
+        ]:
+            hb.addWidget(self._btn(t, fn))
+        cmd_l.addLayout(hb)
+        root.addWidget(cmd_gb)
+
+        loud_gb = QGroupBox("Audio — loudnorm (preset-generated command)")
+        loud_note = QLabel(
+            "When a HandBrake preset is loaded, toggling these updates the command text "
+            "the same way as Settings → Encoding."
         )
-        self.preset_dropdown.pack(side="left", padx=5)
-        self._refresh_preset_dropdown()
-        
-        ctk.CTkButton(
-            preset_frame,
-            text="Load Preset",
-            command=self._load_preset,
-            width=100
-        ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            preset_frame,
-            text="Detect Tracks",
-            command=self._detect_and_update_tracks,
-            width=120
-        ).pack(side="left", padx=5)
-        
-        # Command editor
-        cmd_frame = ctk.CTkFrame(scrollable)
-        cmd_frame.pack(fill="x", pady=10)
-        
-        cmd_header = ctk.CTkFrame(cmd_frame)
-        cmd_header.pack(fill="x", padx=10, pady=5)
-        
-        header_left = ctk.CTkFrame(cmd_header)
-        header_left.pack(side="left", padx=5)
-        
-        ctk.CTkLabel(
-            header_left,
-            text="FFmpeg Command:",
-            font=ctk.CTkFont(size=12, weight="bold")
-        ).pack(side="left", padx=5)
-        
-        # Note about placeholders
-        note_label = ctk.CTkLabel(
-            header_left,
-            text="(Note: 'input.mkv' and 'output.mp4' are example placeholders - actual file paths will be used during encoding)",
-            font=ctk.CTkFont(size=9),
-            text_color=APP_TEXT_DIM,
-        )
-        note_label.pack(side="left", padx=10)
-        
-        # Command management buttons
-        cmd_buttons = ctk.CTkFrame(cmd_header)
-        cmd_buttons.pack(side="right", padx=5)
-        
-        ctk.CTkButton(
-            cmd_buttons,
-            text="Save",
-            command=self._save_command,
-            width=80
-        ).pack(side="left", padx=2)
-        
-        ctk.CTkButton(
-            cmd_buttons,
-            text="Load",
-            command=self._load_saved_command,
-            width=80
-        ).pack(side="left", padx=2)
-        
-        ctk.CTkButton(
-            cmd_buttons,
-            text="Load from File",
-            command=self._load_command_from_file,
-            width=100
-        ).pack(side="left", padx=2)
-        
-        ctk.CTkButton(
-            cmd_buttons,
-            text="Save to File",
-            command=self._save_command_to_file,
-            width=100
-        ).pack(side="left", padx=2)
-        
-        ctk.CTkButton(
-            cmd_buttons,
-            text="Reset",
-            command=self._reset_command,
-            width=80
-        ).pack(side="left", padx=2)
-        
-        # Saved commands dropdown
-        saved_frame = ctk.CTkFrame(cmd_frame)
-        saved_frame.pack(fill="x", padx=10, pady=5)
-        
-        ctk.CTkLabel(saved_frame, text="Saved Commands:").pack(side="left", padx=5)
-        self.saved_cmd_var = ctk.StringVar(value="")
-        self.saved_cmd_dropdown = ctk.CTkComboBox(
-            saved_frame,
-            variable=self.saved_cmd_var,
-            values=[""],
-            command=self._on_saved_command_selected,
-            width=300
-        )
-        self.saved_cmd_dropdown.pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            saved_frame,
-            text="Delete",
-            command=self._delete_saved_command,
-            width=80
-        ).pack(side="left", padx=5)
-        
-        # Info note about placeholders
-        info_frame = ctk.CTkFrame(cmd_frame)
-        info_frame.pack(fill="x", padx=10, pady=(5, 0))
-        
-        info_label = ctk.CTkLabel(
-            info_frame,
-            text="ℹ️ Note: 'input.mkv' and 'output.mp4' shown below are EXAMPLE PLACEHOLDERS only. " +
-                 "During encoding, these will be automatically replaced with the actual input and output file paths.",
-            font=ctk.CTkFont(size=10),
-            text_color=APP_LOG_WARN,
-            anchor="w",
-            justify="left",
-            wraplength=1000
-        )
-        info_label.pack(fill="x", padx=5, pady=5)
-        
-        # Command textbox (now editable)
-        self.cmd_text = ctk.CTkTextbox(
-            cmd_frame,
-            height=100,
-            font=monospace_font(10, master=self),
-            text_color=APP_TEXT_CMD,
-        )
-        self.cmd_text.pack(fill="x", padx=10, pady=5)
-        # Keep it enabled for editing
-        
-        # Command Preview section
-        preview_header = ctk.CTkFrame(cmd_frame)
-        preview_header.pack(fill="x", padx=10, pady=(10, 5))
-        
-        preview_label_frame = ctk.CTkFrame(preview_header)
-        preview_label_frame.pack(side="left", padx=5)
-        
-        ctk.CTkLabel(
-            preview_label_frame,
-            text="Command Preview (read-only):",
-            font=ctk.CTkFont(size=11, weight="bold")
-        ).pack(side="left", padx=5)
-        
-        preview_buttons = ctk.CTkFrame(preview_header)
-        preview_buttons.pack(side="right", padx=5)
-        
-        ctk.CTkButton(
-            preview_buttons,
-            text="Copy Preview",
-            command=self._copy_preview_to_clipboard,
-            width=120,
-            height=25,
-            font=ctk.CTkFont(size=9)
-        ).pack(side="left", padx=2)
-        
-        # Preview textbox (read-only)
-        self.preview_text = ctk.CTkTextbox(
-            cmd_frame,
-            height=100,
-            font=monospace_font(10, master=self),
-            text_color=APP_TEXT_PREVIEW,
-            state="disabled",
-        )
-        self.preview_text.pack(fill="x", padx=10, pady=5)
-        
-        # Placeholder help
-        placeholder_frame = ctk.CTkFrame(cmd_frame)
-        placeholder_frame.pack(fill="x", padx=10, pady=5)
-        
-        ctk.CTkLabel(
-            placeholder_frame,
-            text="Placeholders:",
-            font=ctk.CTkFont(size=10)
-        ).pack(side="left", padx=5)
-        
-        placeholders = [
-            ("{INPUT}", "Input file"),
-            ("{OUTPUT}", "Output file"),
-            ("{AUDIO_TRACK}", "Audio track number"),
-            ("{SUBTITLE_TRACK}", "Subtitle track number"),
-            ("{SUBTITLE_FILE}", "Subtitle file path")
-        ]
-        
-        for placeholder, desc in placeholders:
-            btn = ctk.CTkButton(
-                placeholder_frame,
-                text=placeholder,
-                command=lambda p=placeholder: self._insert_placeholder(p),
-                width=120,
-                height=20,
-                font=ctk.CTkFont(size=9)
+        loud_note.setWordWrap(True)
+        loud_note.setStyleSheet("color: #888888; font-size: 12px;")
+        loud_l = QVBoxLayout(loud_gb)
+        loud_l.addWidget(loud_note)
+        loud_form = QFormLayout()
+        self.loudnorm_cb = QCheckBox("Apply integrated loudnorm (-af)")
+        self.loudnorm_cb.setChecked(config.get_audio_normalize_enabled())
+        self.loudnorm_cb.toggled.connect(self._on_loudnorm_enabled_changed)
+        loud_form.addRow(self.loudnorm_cb)
+        self.loudnorm_I = QDoubleSpinBox()
+        self.loudnorm_I.setRange(-70.0, -5.0)
+        self.loudnorm_I.setDecimals(1)
+        self.loudnorm_I.setSingleStep(0.5)
+        self.loudnorm_I.setValue(config.get_audio_normalize_loudnorm_I())
+        self.loudnorm_I.valueChanged.connect(self._on_loudnorm_params_changed)
+        loud_form.addRow("Target I (LUFS):", self.loudnorm_I)
+        self.loudnorm_TP = QDoubleSpinBox()
+        self.loudnorm_TP.setRange(-9.0, 0.0)
+        self.loudnorm_TP.setDecimals(1)
+        self.loudnorm_TP.setSingleStep(0.5)
+        self.loudnorm_TP.setValue(config.get_audio_normalize_loudnorm_TP())
+        self.loudnorm_TP.valueChanged.connect(self._on_loudnorm_params_changed)
+        loud_form.addRow("True peak TP (dBTP):", self.loudnorm_TP)
+        self.loudnorm_LRA = QDoubleSpinBox()
+        self.loudnorm_LRA.setRange(1.0, 20.0)
+        self.loudnorm_LRA.setDecimals(1)
+        self.loudnorm_LRA.setSingleStep(0.5)
+        self.loudnorm_LRA.setValue(config.get_audio_normalize_loudnorm_LRA())
+        self.loudnorm_LRA.valueChanged.connect(self._on_loudnorm_params_changed)
+        loud_form.addRow("Loudness range LRA:", self.loudnorm_LRA)
+        loud_l.addLayout(loud_form)
+        self._sync_loudnorm_controls_enabled()
+        root.addWidget(loud_gb)
+
+        saved_gb = QGroupBox("Saved command snippets")
+        sv = QHBoxLayout(saved_gb)
+        sv.addWidget(QLabel("Name:"))
+        self.saved_cmd_combo = QComboBox()
+        self.saved_cmd_combo.setMinimumWidth(260)
+        self.saved_cmd_combo.currentTextChanged.connect(self._on_saved_command_selected)
+        sv.addWidget(self.saved_cmd_combo)
+        sv.addWidget(self._btn("Delete", self._delete_saved_command))
+        root.addWidget(saved_gb)
+
+        preview_gb = QGroupBox("Resolved preview (first queued file)")
+        preview_l = QVBoxLayout(preview_gb)
+        preview_hdr = QHBoxLayout()
+        preview_hdr.addWidget(
+            QLabel(
+                "Known placeholders are color-coded; unknown {TOKENS} show in red. Copy uses plain text."
             )
-            btn.pack(side="left", padx=2)
-        
-        help_label = ctk.CTkLabel(
-            placeholder_frame,
-            text="(Click to insert)",
-            font=ctk.CTkFont(size=9),
-            text_color=APP_TEXT_DIM,
         )
-        help_label.pack(side="left", padx=5)
-        
-        # Update saved commands dropdown
-        self._update_saved_commands_dropdown()
-        
-        # Encoding controls
-        controls_frame = ctk.CTkFrame(scrollable)
-        controls_frame.pack(fill="x", pady=10)
-        
-        # Options
-        options_frame = ctk.CTkFrame(controls_frame)
-        options_frame.pack(side="left", padx=5)
-        
-        self.dry_run_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            options_frame,
-            text="Dry Run",
-            variable=self.dry_run_var
-        ).pack(side="left", padx=5)
-        
-        self.skip_existing_var = ctk.BooleanVar(value=config.get_skip_existing())
-        ctk.CTkCheckBox(
-            options_frame,
-            text="Skip Existing",
-            variable=self.skip_existing_var
-        ).pack(side="left", padx=5)
-        
-        # Output suffix
-        suffix_frame = ctk.CTkFrame(controls_frame)
-        suffix_frame.pack(side="left", padx=5)
-        
-        ctk.CTkLabel(suffix_frame, text="Output Suffix:").pack(side="left", padx=5)
-        self.suffix_entry = ctk.CTkEntry(suffix_frame, width=150)
-        self.suffix_entry.insert(0, config.get_default_output_suffix())
-        self.suffix_entry.pack(side="left", padx=5)
-        
-        # Encoding mode
-        mode_frame = ctk.CTkFrame(controls_frame)
-        mode_frame.pack(side="left", padx=5)
-        
-        ctk.CTkLabel(mode_frame, text="Mode:").pack(side="left", padx=5)
-        self.mode_var = ctk.StringVar(value=config.get_encoding_mode())
-        ctk.CTkRadioButton(
-            mode_frame,
-            text="Sequential",
-            variable=self.mode_var,
-            value="sequential"
-        ).pack(side="left", padx=2)
-        ctk.CTkRadioButton(
-            mode_frame,
-            text="Parallel",
-            variable=self.mode_var,
-            value="parallel"
-        ).pack(side="left", padx=2)
-        
-        # Buttons
-        buttons_frame = ctk.CTkFrame(controls_frame)
-        buttons_frame.pack(side="right", padx=5)
-        
-        self.start_button = ctk.CTkButton(
-            buttons_frame,
-            text="Start Encoding",
-            command=self._start_encoding,
-            width=120
-        )
-        self.start_button.pack(side="left", padx=5)
-        
-        self.stop_button = ctk.CTkButton(
-            buttons_frame,
-            text="Stop",
-            command=self._stop_encoding,
-            width=100,
-            state="disabled"
-        )
-        self.stop_button.pack(side="left", padx=5)
-        
-        # Progress display
-        self.progress_display = ProgressDisplay(scrollable)
-        self.progress_display.pack(fill="x", pady=10)
-        
-        # Log viewer (fixed at bottom, not in scrollable frame)
-        log_frame = ctk.CTkFrame(self)
-        log_frame.pack(fill="x", padx=10, pady=(0, 10))
-        
-        self.log_viewer = LogViewer(log_frame, height=200)
-        log_header = ctk.CTkFrame(log_frame)
-        log_header.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(
-            log_header,
-            text="Encoding Log",
-            font=ctk.CTkFont(size=14, weight="bold")
-        ).pack(side="left", padx=(0, 10), pady=0)
-        ctk.CTkButton(log_header, text="Copy", width=70, command=self.log_viewer.copy_to_clipboard).pack(side="left")
-        self.log_viewer.pack(fill="x", padx=10, pady=(0, 10))
-        
-        # Initialize encoder
+        preview_hdr.addStretch()
+        preview_hdr.addWidget(self._btn("Copy plain text", self._copy_preview_to_clipboard))
+        preview_l.addLayout(preview_hdr)
+        self.preview_text = QTextEdit()
+        self.preview_text.setReadOnly(True)
+        self.preview_text.setMinimumHeight(100)
+        self.preview_text.setAcceptRichText(True)
+        preview_l.addWidget(self.preview_text)
+        root.addWidget(preview_gb)
+
+        ph_gb = QGroupBox("Insert placeholders")
+        ph = QHBoxLayout(ph_gb)
+        ph.addWidget(QLabel("Click to insert at cursor:"))
+        for token in [
+            "{INPUT}",
+            "{OUTPUT}",
+            "{AUDIO_TRACK}",
+            "{SUBTITLE_TRACK}",
+            "{SUBTITLE_FILE}",
+        ]:
+            ph.addWidget(self._placeholder_chip(token))
+        ph.addStretch()
+        root.addWidget(ph_gb)
+
+        enc_gb = QGroupBox("Encoding")
+        enc_l = QVBoxLayout(enc_gb)
+        opt = QHBoxLayout()
+        self.dry_run_cb = QCheckBox("Dry Run")
+        self.skip_cb = QCheckBox("Skip Existing")
+        self.skip_cb.setChecked(config.get_skip_existing())
+        self.skip_cb.toggled.connect(lambda v: config.set_skip_existing(v))
+        opt.addWidget(self.dry_run_cb)
+        opt.addWidget(self.skip_cb)
+        opt.addWidget(QLabel("Output Suffix:"))
+        self.suffix_entry = QLineEdit(config.get_default_output_suffix())
+        self.suffix_entry.setMaximumWidth(140)
+        self.suffix_entry.textChanged.connect(self._schedule_preview_update)
+        opt.addWidget(self.suffix_entry)
+        opt.addWidget(QLabel("Mode:"))
+        self._mode_seq = QRadioButton("Sequential")
+        self._mode_par = QRadioButton("Parallel")
+        if config.get_encoding_mode() == "parallel":
+            self._mode_par.setChecked(True)
+        else:
+            self._mode_seq.setChecked(True)
+        self._mode_seq.toggled.connect(lambda: config.set_encoding_mode("parallel" if self._mode_par.isChecked() else "sequential"))
+        self._mode_par.toggled.connect(lambda: config.set_encoding_mode("parallel" if self._mode_par.isChecked() else "sequential"))
+        opt.addWidget(self._mode_seq)
+        opt.addWidget(self._mode_par)
+        opt.addStretch()
+        self.start_btn = self._btn("Start Encoding", self._start_encoding)
+        opt.addWidget(self.start_btn)
+        self.stop_btn = self._btn("Stop", self._stop_encoding)
+        self.stop_btn.setEnabled(False)
+        opt.addWidget(self.stop_btn)
+        enc_l.addLayout(opt)
+        self.progress_display = ProgressDisplay()
+        enc_l.addWidget(self.progress_display)
+        root.addWidget(enc_gb)
+
+        outer.addWidget(scroll)
+
+        log_fr = QFrame()
+        ll = QVBoxLayout(log_fr)
+        self.log_viewer = LogViewer(height=180)
+        lh = QHBoxLayout()
+        lh.addWidget(QLabel("<b>Encoding Log</b>"))
+        lh.addWidget(self._btn("Copy", lambda: self.log_viewer.copy_to_clipboard()))
+        ll.addLayout(lh)
+        ll.addWidget(self.log_viewer)
+        outer.addWidget(log_fr)
+
+        self._bridge.log_msg.connect(self._append_log)
+        self._bridge.progress.connect(self._apply_progress)
+        self._bridge.reset_ui.connect(self._reset_ui_on_encode_end)
+        self._bridge.toast.connect(self._emit_toast)
+        self._bridge.status_text.connect(self.progress_display.set_status)
+
         self._init_encoder()
-        
-        # Try to load last used preset
+        self._refresh_preset_dropdown()
+        self._update_saved_commands_dropdown()
         self._load_last_preset()
-        
-        # Wire up event handlers for preview updates
-        self._setup_preview_handlers()
-        
-        # Initial preview update
         self._update_command_preview_display()
 
+    _AF_OPTION_RE = re.compile(
+        r"(?P<prefix>\s)-af\s+(?P<val>'[^']*'|\"[^\"]*\"|\S+)"
+    )
+
+    def _btn(self, text, slot):
+        b = QPushButton(text)
+        b.clicked.connect(slot)
+        return b
+
+    def _placeholder_chip(self, token: str) -> QPushButton:
+        b = QPushButton(token)
+        bg, fg, hover = self._PLACEHOLDER_CHIP_STYLES[token]
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {bg};
+                color: {fg};
+                border: 1px solid {fg};
+                border-radius: 5px;
+                padding: 4px 8px;
+                font-weight: 600;
+                font-family: Consolas, "Courier New", monospace;
+            }}
+            QPushButton:hover {{
+                background-color: {hover};
+            }}
+            QPushButton:pressed {{
+                background-color: {hover};
+            }}
+            """
+        )
+        b.clicked.connect(lambda: self._insert_placeholder(token))
+        return b
+
+    def _sync_loudnorm_controls_enabled(self) -> None:
+        enabled = self.loudnorm_cb.isChecked()
+        self.loudnorm_I.setEnabled(enabled)
+        self.loudnorm_TP.setEnabled(enabled)
+        self.loudnorm_LRA.setEnabled(enabled)
+
+    def _on_loudnorm_enabled_changed(self, checked: bool) -> None:
+        config.set_audio_normalize_enabled(checked)
+        self._sync_loudnorm_controls_enabled()
+        self._refresh_preset_command_after_loudnorm()
+
+    def _on_loudnorm_params_changed(self, _value: float = 0.0) -> None:
+        config.set_audio_normalize_loudnorm_I(self.loudnorm_I.value())
+        config.set_audio_normalize_loudnorm_TP(self.loudnorm_TP.value())
+        config.set_audio_normalize_loudnorm_LRA(self.loudnorm_LRA.value())
+        self._refresh_preset_command_after_loudnorm()
+
+    def _refresh_preset_command_after_loudnorm(self) -> None:
+        self._apply_loudnorm_to_current_cmd_text()
+        self._schedule_preview_update()
+
+    def apply_audio_normalize_settings_from_config(self) -> None:
+        """Sync loudnorm widgets when config was changed elsewhere (e.g. Settings tab)."""
+        self.loudnorm_cb.blockSignals(True)
+        self.loudnorm_I.blockSignals(True)
+        self.loudnorm_TP.blockSignals(True)
+        self.loudnorm_LRA.blockSignals(True)
+        try:
+            self.loudnorm_cb.setChecked(config.get_audio_normalize_enabled())
+            self.loudnorm_I.setValue(config.get_audio_normalize_loudnorm_I())
+            self.loudnorm_TP.setValue(config.get_audio_normalize_loudnorm_TP())
+            self.loudnorm_LRA.setValue(config.get_audio_normalize_loudnorm_LRA())
+        finally:
+            self.loudnorm_cb.blockSignals(False)
+            self.loudnorm_I.blockSignals(False)
+            self.loudnorm_TP.blockSignals(False)
+            self.loudnorm_LRA.blockSignals(False)
+        self._sync_loudnorm_controls_enabled()
+        self._schedule_preview_update()
+
+    def _strip_af_value_quotes(self, af_value: str) -> tuple[str, str]:
+        """Return (unquoted_value, quote_char) where quote_char is '' or one of \"'\" / '\"'."""
+        if len(af_value) >= 2 and af_value[0] == af_value[-1] and af_value[0] in ("'", '"'):
+            return af_value[1:-1], af_value[0]
+        return af_value, ""
+
+    def _quote_af_value(self, af_value_unquoted: str, quote_char: str) -> str:
+        if quote_char:
+            return f"{quote_char}{af_value_unquoted}{quote_char}"
+        return af_value_unquoted
+
+    def _apply_loudnorm_to_current_cmd_text(self) -> None:
+        """
+        Update only the -af option in the current command template.
+
+        This preserves manual video encoding edits (e.g. NVENC encoder selection)
+        while still letting the loudnorm toggle affect audio loudness.
+        """
+        filter_expr = self._audio_filter_from_settings()
+        cmd = self.cmd_text.toPlainText()
+        if not cmd.strip():
+            return
+
+        def repl_enable(match: re.Match) -> str:
+            prefix = match.group("prefix")
+            existing_raw = match.group("val")
+            existing, quote_char = self._strip_af_value_quotes(existing_raw)
+
+            if existing.strip().startswith("loudnorm="):
+                new_val = self._quote_af_value(filter_expr or "", quote_char)
+            else:
+                # If user already has some audio filters, append loudnorm.
+                existing_parts = [p.strip() for p in existing.split(",") if p.strip()]
+                if existing_parts:
+                    existing_parts.append(filter_expr or "")
+                    new_val = self._quote_af_value(",".join(existing_parts), quote_char)
+                else:
+                    new_val = self._quote_af_value(filter_expr or "", quote_char)
+
+            return f"{prefix}-af {new_val}"
+
+        def repl_disable(match: re.Match) -> str:
+            prefix = match.group("prefix")
+            existing_raw = match.group("val")
+            existing, quote_char = self._strip_af_value_quotes(existing_raw)
+
+            parts = [p.strip() for p in existing.split(",") if p.strip()]
+            kept = [p for p in parts if not p.startswith("loudnorm=")]
+            if not kept:
+                return ""  # remove whole -af option
+            return f"{prefix}-af {self._quote_af_value(','.join(kept), quote_char)}"
+
+        # Enable loudnorm: replace/insert
+        if filter_expr:
+            if self._AF_OPTION_RE.search(cmd):
+                new_cmd = self._AF_OPTION_RE.sub(repl_enable, cmd, count=1)
+            else:
+                insert_at: Optional[int] = None
+                for patt in [r"\s-c:a\b", r"\s-map_chapters\b", r"\s-y\b"]:
+                    m = re.search(patt, cmd)
+                    if m:
+                        insert_at = m.start()
+                        break
+                insert_str = f" -af {filter_expr}"
+                if insert_at is not None:
+                    new_cmd = cmd[:insert_at] + insert_str + cmd[insert_at:]
+                else:
+                    new_cmd = cmd + insert_str
+        else:
+            # Disable loudnorm: remove loudnorm entries from -af, but keep other filters.
+            if not self._AF_OPTION_RE.search(cmd):
+                return
+            new_cmd = self._AF_OPTION_RE.sub(repl_disable, cmd, count=1)
+
+        self.cmd_text.blockSignals(True)
+        self.cmd_text.setPlainText(new_cmd)
+        self.cmd_text.blockSignals(False)
+
     def _audio_filter_from_settings(self) -> Optional[str]:
-        """Single-pass loudnorm filter from Settings, or None when disabled."""
         if not config.get_audio_normalize_enabled():
             return None
         return build_integrated_loudnorm_filter(
@@ -379,646 +432,387 @@ class FFmpegTab(ctk.CTkFrame):
             config.get_audio_normalize_loudnorm_LRA(),
         )
 
-    def _setup_preview_handlers(self):
-        """Set up event handlers to update preview automatically"""
-        # Bind to command textbox changes
-        def on_cmd_text_change(event=None):
-            # Use after() to debounce rapid changes
-            self.after(300, self._update_command_preview_display)
-        
-        # Bind to text modification events
-        self.cmd_text.bind('<KeyRelease>', on_cmd_text_change)
-        self.cmd_text.bind('<Button-1>', on_cmd_text_change)  # Mouse click
-        self.cmd_text.bind('<ButtonRelease-1>', on_cmd_text_change)
-        
-        # Bind to suffix entry changes
-        def on_suffix_change(event=None):
-            self.after(300, self._update_command_preview_display)
-        
-        self.suffix_entry.bind('<KeyRelease>', on_suffix_change)
-        self.suffix_entry.bind('<FocusOut>', on_suffix_change)
-    
-    def on_files_changed(self):
-        """Callback for when files list changes - update preview"""
-        self._update_command_preview_display()
-    
-    def _marshal_ui_update(self, func, *args, **kwargs):
-        """Marshal a UI update to the main thread via after()"""
-        self.after(0, func, *args, **kwargs)
-    
-    def _reset_ui_on_encode_end(self):
-        """Reset UI after encoding (safe from worker thread via marshaling)"""
-        self.is_encoding = False
-        self.start_button.configure(state="normal")
-        self.stop_button.configure(state="disabled")
-        self.progress_display.reset()
-    
-    def _init_encoder(self):
-        """Initialize encoder with paths from config"""
+    def _schedule_preview_update(self) -> None:
+        self._preview_timer.start(300)
+
+    def on_files_changed(self) -> None:
+        self._schedule_preview_update()
+
+    def _init_encoder(self) -> None:
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
         handbrake_path = config.get_handbrake_path() or "HandBrakeCLI"
         mkvinfo_path = config.get_mkvinfo_path() or "mkvinfo"
-        
         self.encoder = Encoder(
             ffmpeg_path=ffmpeg_path,
             handbrake_path=handbrake_path,
             progress_callback=self._on_progress,
-            log_callback=self._on_log
+            log_callback=self._on_log,
         )
-        
         self.track_analyzer = TrackAnalyzer(
             mkvinfo_path=mkvinfo_path if mkvinfo_path != "mkvinfo" else None
         )
-    
-    def _refresh_preset_dropdown(self):
-        """Refresh the preset dropdown with saved presets"""
-        saved_presets = config.get_saved_presets()
-        preset_names = list(saved_presets.keys())
-        
-        if preset_names:
-            self.preset_dropdown.configure(values=[""] + preset_names)
-        else:
-            self.preset_dropdown.configure(values=[""])
-    
-    def _load_preset(self):
-        """Load HandBrake preset file from file dialog"""
-        file = filedialog.askopenfilename(
-            title="Select HandBrake preset JSON file",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+
+    def _refresh_preset_dropdown(self) -> None:
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        self.preset_combo.addItem("")
+        for name in config.get_saved_presets().keys():
+            self.preset_combo.addItem(name)
+        self.preset_combo.blockSignals(False)
+
+    def _load_preset(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select HandBrake preset JSON file", "", "JSON (*.json);;All (*.*)"
         )
-        
-        if file:
+        if path:
             try:
-                self._load_preset_from_path(Path(file), save=True)
+                self._load_preset_from_path(Path(path), save=True)
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to load preset: {str(e)}")
-    
-    def _load_preset_from_path(self, preset_path: Path, save: bool = False):
-        """Load a preset from a file path"""
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _load_preset_from_path(self, preset_path: Path, save: bool = False) -> None:
         self.preset_parser = PresetParser(preset_path)
         self.ffmpeg_translator = FFmpegTranslator(self.preset_parser)
-        
         preset_name = self.preset_parser.get_preset_name()
-        
-        # Save the preset to config directory if requested
         if save:
             config.save_preset(preset_name, preset_path)
             config.set_last_used_preset(preset_name)
             self._refresh_preset_dropdown()
-            # Update dropdown to show the selected preset
-            self.preset_var.set(preset_name)
+            i = self.preset_combo.findText(preset_name)
+            if i >= 0:
+                self.preset_combo.setCurrentIndex(i)
         else:
-            # Still set as last used
             config.set_last_used_preset(preset_name)
-        
-        # Update command preview (with placeholder file)
         self._update_command_preview()
-        
-        # Update preview display
         self._update_command_preview_display()
-        
         self._on_log("INFO", f"Loaded preset: {preset_name}")
-    
-    def _on_preset_selected(self, choice: str):
-        """Handle preset selection from dropdown"""
+
+    def _on_preset_selected(self, choice: str) -> None:
         if not choice:
             return
-        
-        preset_path = config.get_preset_path(choice)
-        if preset_path:
+        pp = config.get_preset_path(choice)
+        if pp:
             try:
-                self._load_preset_from_path(preset_path, save=False)
+                self._load_preset_from_path(pp, save=False)
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to load preset: {str(e)}")
+                QMessageBox.critical(self, "Error", str(e))
                 self._refresh_preset_dropdown()
-                self.preset_var.set("")
-    
-    def _load_last_preset(self):
-        """Load the last used preset if available"""
-        last_preset = config.get_last_used_preset()
-        if last_preset:
-            preset_path = config.get_preset_path(last_preset)
-            if preset_path:
+                self.preset_combo.setCurrentIndex(0)
+
+    def _load_last_preset(self) -> None:
+        last = config.get_last_used_preset()
+        if last:
+            pp = config.get_preset_path(last)
+            if pp:
                 try:
-                    self._load_preset_from_path(preset_path, save=False)
-                    self.preset_var.set(last_preset)
+                    self._load_preset_from_path(pp, save=False)
+                    i = self.preset_combo.findText(last)
+                    if i >= 0:
+                        self.preset_combo.setCurrentIndex(i)
                 except Exception:
-                    # If preset file doesn't exist or is invalid, just ignore
                     pass
-    
-    def _update_command_preview(self):
-        """Update FFmpeg command preview"""
+
+    def _update_command_preview(self) -> None:
         if not self.ffmpeg_translator:
             return
-        
-        # Use placeholder for preview
-        placeholder_input = Path("input.mkv")
-        placeholder_output = Path("output.mp4")
-        
-        # Use audio_track=2 as placeholder (represents track ID 1, which would map to stream 1)
-        # This gives a more realistic preview. The actual track will be detected during encoding.
-        # Check if we can detect subtitle track from first file for better preview
+        ph_in = Path("input.mkv")
+        ph_out = Path("output.mp4")
         subtitle_track_preview = None
         if self.get_files_callback:
             files = self.get_files_callback()
-            if files and len(files) > 0:
-                first_file_data = files[0]
-                subtitle_track_preview = first_file_data.get("subtitle_track")
-                # If not in file data, try to analyze
+            if files:
+                fd = files[0]
+                subtitle_track_preview = fd.get("subtitle_track")
                 if subtitle_track_preview is None and self.track_analyzer:
                     try:
-                        source_file = Path(first_file_data["path"])
-                        tracks = self.track_analyzer.analyze_tracks(source_file)
-                        if not tracks.get("error"):
-                            subtitle_track_preview = tracks.get("subtitle")
+                        tr = self.track_analyzer.analyze_tracks(Path(fd["path"]))
+                        if not tr.get("error"):
+                            subtitle_track_preview = tr.get("subtitle")
                     except Exception:
                         pass
-        
         cmd = self.ffmpeg_translator.get_command_string(
-            input_file=placeholder_input,
-            output_file=placeholder_output,
-            audio_track=2,  # Track ID 1 + 1 = 2, which maps to stream 1
+            input_file=ph_in,
+            output_file=ph_out,
+            audio_track=2,
             subtitle_track=subtitle_track_preview,
             audio_filter=self._audio_filter_from_settings(),
         )
-        
-        self.cmd_text.delete("1.0", "end")
-        self.cmd_text.insert("1.0", cmd)
-        # Update preview after command is updated
-        self._update_command_preview_display()
-    
-    def _detect_and_update_tracks(self):
-        """Detect tracks from first file and update command"""
+        self.cmd_text.blockSignals(True)
+        self.cmd_text.setPlainText(cmd)
+        self.cmd_text.blockSignals(False)
+
+    def _detect_and_update_tracks(self) -> None:
         if not self.ffmpeg_translator:
-            messagebox.showwarning("No Preset", "Please load a HandBrake preset first")
+            QMessageBox.warning(self, "No Preset", "Please load a HandBrake preset first")
             return
-        
         if not self.get_files_callback:
-            messagebox.showwarning("No Files", "No files available. Please add files to the file list first.")
+            QMessageBox.warning(self, "No Files", "Add files to the file list first.")
             return
-        
         files = self.get_files_callback()
-        if not files or len(files) == 0:
-            messagebox.showwarning("No Files", "No files in the file list. Please add files first.")
+        if not files:
+            QMessageBox.warning(self, "No Files", "No files in the file list.")
             return
-        
-        # Get first file
-        first_file_data = files[0]
-        source_file = Path(first_file_data["path"])
-        
+        source_file = Path(files[0]["path"])
         if not source_file.exists():
-            messagebox.showerror("File Not Found", f"File not found: {source_file}")
+            QMessageBox.critical(self, "Not Found", str(source_file))
             return
-        
-        # Show progress
         self._on_log("INFO", f"Analyzing tracks for: {source_file.name}")
-        
-        # Analyze tracks
         if not self.track_analyzer:
-            messagebox.showerror("No Analyzer", "Track analyzer not available. Please check mkvinfo installation.")
+            QMessageBox.critical(self, "No Analyzer", "Track analyzer not available.")
             return
-        
         try:
             tracks = self.track_analyzer.analyze_tracks(source_file)
-            
             if tracks.get("error"):
-                messagebox.showerror("Analysis Failed", f"Track analysis failed: {tracks['error']}")
+                QMessageBox.critical(self, "Failed", tracks["error"])
                 return
-            
             audio_track, subtitle_track = compute_effective_tracks(
                 tracks,
                 self.track_analyzer,
                 log_info=lambda msg: self._on_log("INFO", msg),
                 source_label="",
             )
-
-            # Debug: Log all tracks found
-            if tracks.get("all_tracks"):
-                self._on_log("DEBUG", f"Found {len(tracks['all_tracks'])} tracks in file")
-                subtitle_patterns = config.get_subtitle_name_patterns()
-                self._on_log("DEBUG", f"Subtitle name patterns: {subtitle_patterns}")
-                for track in tracks["all_tracks"]:
-                    if track["type"] == "subtitles":
-                        is_eng = self.track_analyzer._is_english_subtitle_track(track["language"], track["name"])
-                        is_signs = self.track_analyzer._is_signs_songs_track(track["name"])
-                        self._on_log("DEBUG", f"Subtitle track {track['id']} (HandBrake track {track['id'] + 1}): lang='{track['language']}', name='{track['name']}', English={is_eng}, Signs&Songs={is_signs}")
-                self._on_log("DEBUG", f"Analysis returned: audio={tracks.get('audio')}, first_audio={tracks.get('first_audio')}, subtitle={tracks.get('subtitle')}")
-
             if not audio_track:
-                messagebox.showwarning("No Audio Track", "No English audio track found. Enable 'Encode Japanese audio with English subs' in Settings to use the first audio track.")
+                QMessageBox.warning(
+                    self,
+                    "No Audio",
+                    "No English audio track found. Enable Japanese+audio option in Settings if needed.",
+                )
                 return
-
-            # Update file data
-            first_file_data["audio_track"] = audio_track
-            first_file_data["subtitle_track"] = subtitle_track
+            files[0]["audio_track"] = audio_track
+            files[0]["subtitle_track"] = subtitle_track
             if self.update_file_callback:
-                self.update_file_callback(0, first_file_data)
-            
-            # Generate new command with detected tracks
-            placeholder_input = Path("input.mkv")
-            placeholder_output = Path("output.mp4")
-            
+                self.update_file_callback(0, files[0])
+            ph_in = Path("input.mkv")
+            ph_out = Path("output.mp4")
             cmd = self.ffmpeg_translator.get_command_string(
-                input_file=placeholder_input,
-                output_file=placeholder_output,
+                input_file=ph_in,
+                output_file=ph_out,
                 audio_track=audio_track,
                 subtitle_track=subtitle_track,
                 audio_filter=self._audio_filter_from_settings(),
             )
-            
-            # Update command textbox
-            self.cmd_text.delete("1.0", "end")
-            self.cmd_text.insert("1.0", cmd)
-            
-            # Update preview
+            self.cmd_text.setPlainText(cmd)
             self._update_command_preview_display()
-            
-            # Show success message
-            track_info = f"Audio track: {audio_track}"
-            if subtitle_track is not None:
-                track_info += f", Subtitle track: {subtitle_track}"
-            else:
-                track_info += ", No subtitle track detected"
-            messagebox.showinfo("Tracks Detected", f"Tracks detected successfully!\n{track_info}\n\nCommand updated with detected tracks.")
-            self._on_log("SUCCESS", f"Tracks detected - {track_info}")
-            
+            QMessageBox.information(self, "Tracks", "Tracks detected; command updated.")
+            self._on_log("SUCCESS", "Tracks detected")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to detect tracks: {str(e)}")
-            self._on_log("ERROR", f"Track detection failed: {str(e)}")
-            import traceback
-            self._on_log("ERROR", f"Traceback: {traceback.format_exc()}")
-    
+            QMessageBox.critical(self, "Error", str(e))
+
     def _generate_command_preview(self) -> str:
-        """Generate command preview with actual values from settings and files"""
-        # Get current command from textbox
-        command_template = self.cmd_text.get("1.0", "end-1c").strip()
-        
-        if not command_template:
-            return "No command entered - load a preset or enter a command to see preview"
-        
-        # Try to get first file from files list
-        files = []
-        if self.get_files_callback:
-            files = self.get_files_callback()
-        
-        if not files or len(files) == 0:
-            return "No files available - add files to see preview with actual file paths"
-        
-        # Get first file
-        first_file_data = files[0]
-        source_file = Path(first_file_data["path"])
-        
-        # Calculate output path
-        if self.get_output_path_callback:
-            output_dir = self.get_output_path_callback(source_file)
-        else:
-            output_dir = source_file.parent
-        
-        suffix = self.suffix_entry.get() if hasattr(self, 'suffix_entry') else config.get_default_output_suffix()
-        output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
-        
-        # Try to get track info from file data or analyze
-        audio_track = first_file_data.get("audio_track")
-        subtitle_track = first_file_data.get("subtitle_track")
-        
-        # If tracks not in file data, try to analyze (but don't block if it fails)
-        if audio_track is None and self.track_analyzer:
-            try:
-                tracks = self.track_analyzer.analyze_tracks(source_file)
-                if not tracks.get("error"):
-                    audio_track = tracks.get("audio", 2)  # Default to 2 if not found
-                    subtitle_track = tracks.get("subtitle")
-            except Exception:
-                # If analysis fails, use defaults
-                audio_track = 2
-                subtitle_track = None
-        
-        # Use defaults if still not set
-        if audio_track is None:
-            audio_track = 2
-        
-        # Generate example subtitle file path if subtitle track exists
-        subtitle_file = None
-        if subtitle_track is not None:
-            # Create a temporary path example (won't actually exist, just for preview)
-            subtitle_file = Path(tempfile.gettempdir()) / f"{source_file.stem}_subtitle.mkv"
-        
-        # Replace placeholders using similar logic to _parse_and_substitute_command
-        # but format for display (with quotes for paths with spaces)
-        command = command_template
-        
-        # Helper function to quote paths with spaces for display
-        def quote_path_if_needed(path_str: str) -> str:
-            """Quote path if it contains spaces, for display purposes"""
-            if ' ' in path_str:
-                return f'"{path_str}"'
-            return path_str
-        
-        input_file_str = str(source_file)
-        output_file_str = str(output_file)
-        
-        # Quote paths with spaces for display
-        input_file_quoted = quote_path_if_needed(input_file_str)
-        output_file_quoted = quote_path_if_needed(output_file_str)
-        
-        # Escape paths for regex replacement (use re.escape to handle all special chars safely)
-        def escape_for_replacement(path_str: str) -> str:
-            # For replacement strings, we need to escape backslashes to prevent
-            # Python from interpreting escape sequences like \U as Unicode escapes
-            return path_str.replace('\\', '\\\\')
-        
-        input_file_escaped = escape_for_replacement(input_file_quoted)
-        output_file_escaped = escape_for_replacement(output_file_quoted)
-        
-        # Replace input file placeholders
-        # Use lambda to avoid issues with backslashes in replacement strings
-        command = re.sub(r'\binput\.mkv\b', lambda m: input_file_quoted, command, flags=re.IGNORECASE)
-        command = re.sub(r'\{INPUT\}', lambda m: input_file_quoted, command)
-        command = re.sub(r'<INPUT>', lambda m: input_file_quoted, command)
-        
-        # Replace output file placeholders
-        command = re.sub(r'\boutput\.mp4\b', lambda m: output_file_quoted, command, flags=re.IGNORECASE)
-        command = re.sub(r'\{OUTPUT\}', lambda m: output_file_quoted, command)
-        command = re.sub(r'<OUTPUT>', lambda m: output_file_quoted, command)
-        
-        # Replace audio track placeholder
-        command = re.sub(r'\{AUDIO_TRACK\}', str(audio_track), command)
-        command = re.sub(r'<AUDIO_TRACK>', str(audio_track), command)
-        
-        # Replace audio stream mapping with correct stream ID
-        audio_stream_id = audio_track - 1
-        command = re.sub(
-            r'(-map\s+0:v:0\s+)-map\s+0:\d+',
-            rf'\1-map 0:{audio_stream_id}',
-            command
+        return generate_command_preview(
+            self.cmd_text.toPlainText(),
+            self.get_files_callback,
+            self.get_output_path_callback,
+            self.suffix_entry.text() or config.get_default_output_suffix(),
+            self.track_analyzer,
         )
-        
-        # Replace subtitle track placeholder
-        if subtitle_track is not None:
-            command = re.sub(r'\{SUBTITLE_TRACK\}', str(subtitle_track), command)
-            command = re.sub(r'<SUBTITLE_TRACK>', str(subtitle_track), command)
-        
-        # Replace subtitle file placeholder
-        if subtitle_file:
-            # Format subtitle path for filter (convert to forward slashes)
-            sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
-            sub_path = sub_path.replace("'", "'\\''")
-            # Use lambda to avoid issues with backslashes in replacement strings
-            command = re.sub(r'\{SUBTITLE_FILE\}', lambda m: sub_path, command)
-            command = re.sub(r'<SUBTITLE_FILE>', lambda m: sub_path, command)
-        
-        # Replace quoted placeholders
-        command = re.sub(r'"input\.mkv"', lambda m: input_file_quoted, command, flags=re.IGNORECASE)
-        command = re.sub(r'"output\.mp4"', lambda m: output_file_quoted, command, flags=re.IGNORECASE)
-        input_single_quoted = f"'{input_file_str}'"
-        output_single_quoted = f"'{output_file_str}'"
-        command = re.sub(r"'input\.mkv'", lambda m: input_single_quoted, command, flags=re.IGNORECASE)
-        command = re.sub(r"'output\.mp4'", lambda m: output_single_quoted, command, flags=re.IGNORECASE)
-        
-        # Replace ffmpeg path if present (use lambda to handle paths with backslashes)
-        ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
-        if ffmpeg_path != "ffmpeg":
-            command = re.sub(r'\bffmpeg\b', lambda m: ffmpeg_path, command, flags=re.IGNORECASE)
-        
-        return command
-    
-    def _update_command_preview_display(self):
-        """Update the command preview textbox"""
+
+    def _update_command_preview_display(self) -> None:
         try:
-            preview_text = self._generate_command_preview()
-            self.preview_text.configure(state="normal")
-            self.preview_text.delete("1.0", "end")
-            self.preview_text.insert("1.0", preview_text)
-            self.preview_text.configure(state="disabled")
+            plain = self._generate_command_preview()
         except Exception as e:
-            # If preview generation fails, show error message
-            self.preview_text.configure(state="normal")
-            self.preview_text.delete("1.0", "end")
-            self.preview_text.insert("1.0", f"Error generating preview: {str(e)}")
-            self.preview_text.configure(state="disabled")
-    
-    def _copy_preview_to_clipboard(self):
-        """Copy the preview command to clipboard"""
+            plain = f"Error generating preview: {e}"
+        self._last_preview_plain = plain
         try:
-            preview_text = self.preview_text.get("1.0", "end-1c")
-            if preview_text and not preview_text.startswith("No command") and not preview_text.startswith("No files"):
-                self.clipboard_clear()
-                self.clipboard_append(preview_text)
-                messagebox.showinfo("Copied", "Preview command copied to clipboard")
-            else:
-                messagebox.showwarning("Nothing to Copy", "No valid preview available to copy")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to copy to clipboard: {str(e)}")
-    
-    def _save_command(self):
-        """Save the current command"""
-        command = self.cmd_text.get("1.0", "end-1c").strip()
-        if not command:
-            messagebox.showwarning("No Command", "No command to save")
+            self.preview_text.setHtml(ffmpeg_preview_to_html(plain))
+        except Exception:
+            self.preview_text.setPlainText(plain)
+
+    def _copy_preview_to_clipboard(self) -> None:
+        t = (self._last_preview_plain or "").strip()
+        if t and not t.startswith("No command") and not t.startswith("No files"):
+            QGuiApplication.clipboard().setText(t)
+            self._show_toast("Preview copied (plain text).", "success")
+        else:
+            self._show_toast("Nothing useful to copy yet.", "warning")
+
+    def _save_command(self) -> None:
+        cmd = self.cmd_text.toPlainText().strip()
+        if not cmd:
+            QMessageBox.warning(self, "Empty", "No command to save")
             return
-        
-        # Ask for a name
-        from tkinter import simpledialog
-        name = simpledialog.askstring("Save Command", "Enter a name for this command:")
-        if name:
-            config.save_ffmpeg_command(name, command)
+        name, ok = QInputDialog.getText(self, "Save Command", "Name:")
+        if ok and name.strip():
+            config.save_ffmpeg_command(name.strip(), cmd)
             self._update_saved_commands_dropdown()
-            messagebox.showinfo("Saved", f"Command saved as '{name}'")
-    
-    def _load_saved_command(self):
-        """Load a saved command"""
-        saved_cmd = self.saved_cmd_var.get()
-        if not saved_cmd:
-            messagebox.showwarning("No Selection", "Please select a saved command from the dropdown")
+
+    def _load_saved_command(self) -> None:
+        n = self.saved_cmd_combo.currentText()
+        if not n:
             return
-        
-        command = config.get_ffmpeg_command(saved_cmd)
-        if command:
-            self.cmd_text.delete("1.0", "end")
-            self.cmd_text.insert("1.0", command)
-        else:
-            messagebox.showerror("Error", f"Command '{saved_cmd}' not found")
-    
-    def _load_command_from_file(self):
-        """Load command from a text file"""
-        file = filedialog.askopenfilename(
-            title="Load FFmpeg Command",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if file:
+        c = config.get_ffmpeg_command(n)
+        if c:
+            self.cmd_text.setPlainText(c)
+            self._update_command_preview_display()
+
+    def _load_command_from_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load command", "", "Text (*.txt);;All (*.*)")
+        if path:
             try:
-                with open(file, 'r', encoding='utf-8') as f:
-                    command = f.read().strip()
-                self.cmd_text.delete("1.0", "end")
-                self.cmd_text.insert("1.0", command)
+                self.cmd_text.setPlainText(Path(path).read_text(encoding="utf-8").strip())
                 self._update_command_preview_display()
-                messagebox.showinfo("Loaded", "Command loaded from file")
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to load file: {str(e)}")
-    
-    def _save_command_to_file(self):
-        """Save command to a text file"""
-        command = self.cmd_text.get("1.0", "end-1c").strip()
-        if not command:
-            messagebox.showwarning("No Command", "No command to save")
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _save_command_to_file(self) -> None:
+        cmd = self.cmd_text.toPlainText().strip()
+        if not cmd:
             return
-        
-        file = filedialog.asksaveasfilename(
-            title="Save FFmpeg Command",
-            defaultextension=".txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
-        if file:
+        path, _ = QFileDialog.getSaveFileName(self, "Save command", "", "Text (*.txt)")
+        if path:
             try:
-                with open(file, 'w', encoding='utf-8') as f:
-                    f.write(command)
-                messagebox.showinfo("Saved", f"Command saved to {file}")
+                Path(path).write_text(cmd, encoding="utf-8")
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to save file: {str(e)}")
-    
-    def _reset_command(self):
-        """Reset command to generated from preset"""
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _reset_command(self) -> None:
         if self.ffmpeg_translator:
             self._update_command_preview()
+            self._update_command_preview_display()
         else:
-            messagebox.showwarning("No Preset", "Load a HandBrake preset first to generate a command")
-    
-    def _delete_saved_command(self):
-        """Delete a saved command"""
-        saved_cmd = self.saved_cmd_var.get()
-        if not saved_cmd:
-            messagebox.showwarning("No Selection", "Please select a saved command to delete")
+            QMessageBox.warning(self, "No Preset", "Load a HandBrake preset first")
+
+    def _delete_saved_command(self) -> None:
+        n = self.saved_cmd_combo.currentText()
+        if not n:
             return
-        
-        if messagebox.askyesno("Confirm Delete", f"Delete saved command '{saved_cmd}'?"):
-            config.delete_ffmpeg_command(saved_cmd)
+        r = QMessageBox.question(
+            self,
+            "Delete",
+            f"Delete '{n}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if r == QMessageBox.StandardButton.Yes:
+            config.delete_ffmpeg_command(n)
             self._update_saved_commands_dropdown()
-            messagebox.showinfo("Deleted", f"Command '{saved_cmd}' deleted")
-    
-    def _update_saved_commands_dropdown(self):
-        """Update the saved commands dropdown"""
-        commands = config.get_saved_ffmpeg_commands()
-        if commands:
-            self.saved_cmd_dropdown.configure(values=list(commands.keys()))
-        else:
-            self.saved_cmd_dropdown.configure(values=[""])
-            self.saved_cmd_var.set("")
-    
-    def _on_saved_command_selected(self, choice):
-        """Handle saved command selection"""
+
+    def _update_saved_commands_dropdown(self) -> None:
+        cmds = config.get_saved_ffmpeg_commands()
+        self.saved_cmd_combo.blockSignals(True)
+        self.saved_cmd_combo.clear()
+        for k in cmds.keys():
+            self.saved_cmd_combo.addItem(k)
+        self.saved_cmd_combo.blockSignals(False)
+
+    def _on_saved_command_selected(self, choice: str) -> None:
         if choice:
-            command = config.get_ffmpeg_command(choice)
-            if command:
-                self.cmd_text.delete("1.0", "end")
-                self.cmd_text.insert("1.0", command)
+            c = config.get_ffmpeg_command(choice)
+            if c:
+                self.cmd_text.setPlainText(c)
                 self._update_command_preview_display()
-    
-    def _insert_placeholder(self, placeholder: str):
-        """Insert a placeholder at the cursor position"""
-        try:
-            # Get cursor position
-            cursor_pos = self.cmd_text.index("insert")
-            # Insert the placeholder
-            self.cmd_text.insert(cursor_pos, placeholder)
-            # Update preview after inserting placeholder
-            self._update_command_preview_display()
-        except Exception:
-            # If cursor position fails, just append
-            self.cmd_text.insert("end", placeholder)
-            # Update preview after inserting placeholder
-            self._update_command_preview_display()
-    
-    def _start_encoding(self):
-        """Start encoding process"""
-        # Check if there's a command (either from preset or edited)
-        command = self.cmd_text.get("1.0", "end-1c").strip()
-        if not command:
+
+    def _insert_placeholder(self, p: str) -> None:
+        self.cmd_text.insertPlainText(p)
+        self._schedule_preview_update()
+
+    def _append_log(self, level: str, message: str) -> None:
+        self.log_viewer.add_log(level, message)
+
+    def _apply_progress(self, progress: EncodingProgress) -> None:
+        if progress.percent is not None:
+            self.progress_display.set_progress(progress.percent)
+            s = f"{progress.percent:.1f}%"
+            if progress.eta:
+                s += f" - ETA: {progress.eta}"
+            self.progress_display.set_status(s)
+        elif progress.time:
+            s = f"Time: {progress.time}"
+            if progress.speed:
+                s += f" - Speed: {progress.speed:.2f}x"
+            self.progress_display.set_status(s)
+
+    def _on_progress(self, progress: EncodingProgress) -> None:
+        now = time.monotonic()
+        min_interval = 0.2
+        near = progress.percent is not None and progress.percent >= 100.0
+        if (
+            self._progress_ui_throttle_last is not None
+            and (now - self._progress_ui_throttle_last) < min_interval
+            and not near
+        ):
+            return
+        self._progress_ui_throttle_last = now
+        self._bridge.progress.emit(progress)
+
+    def _on_log(self, level: str, message: str) -> None:
+        if level == "DEBUG" and not config.get_debug_logging():
+            return
+        self._bridge.log_msg.emit(level, message)
+        p = f"[FFmpeg] {message}"
+        if level == "ERROR":
+            logger.error(p)
+        elif level == "WARNING":
+            logger.warning(p)
+        elif level == "SUCCESS":
+            logger.success(p)
+        elif level == "DEBUG":
+            logger.debug(p)
+        else:
+            logger.info(p)
+
+    def _emit_toast(self, message: str, kind: str) -> None:
+        w = self.main_window or self.window()
+        if hasattr(w, "toast_manager"):
+            w.toast_manager.show(message, message_type=kind, duration=5)
+
+    def _show_toast(self, message: str, kind: str = "warning") -> None:
+        self._emit_toast(message, kind)
+
+    def _start_encoding(self) -> None:
+        cmd = self.cmd_text.toPlainText().strip()
+        if not cmd:
             self._show_toast("Please load a preset or enter an FFmpeg command", "warning")
             return
-        
-        if not self.get_files_callback:
-            self._show_toast("No files available. Please scan for files first.", "warning")
-            return
-        
-        files = self.get_files_callback()
-        if not files:
+        if not self.get_files_callback or not self.get_files_callback():
             self._show_toast("No files to encode", "warning")
             return
-        
         if self.is_encoding:
             return
-        
-        # Ensure previous encoding thread has fully exited before starting new one
         if self.encoding_thread and self.encoding_thread.is_alive():
             self.encoding_thread.join(timeout=2.0)
-        
         self.is_encoding = True
-        self.start_button.configure(state="disabled")
-        self.stop_button.configure(state="normal")
-        
-        # Reset encoder stop event
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         if self.encoder:
             self.encoder.reset_stop_event()
-        
-        # Initialize batch statistics
         self.batch_stats = BatchStats()
-        
-        # Start encoding in thread
+        cmd_snapshot = self.cmd_text.toPlainText().strip()
         self.encoding_thread = threading.Thread(
             target=self._encode_files,
-            args=(files,),
-            daemon=True
+            args=(self.get_files_callback(), cmd_snapshot),
+            daemon=True,
         )
         self.encoding_thread.start()
-    
-    def _encode_files(self, files):
-        """Encode files (runs in thread)"""
-        dry_run = self.dry_run_var.get()
-        skip_existing = self.skip_existing_var.get()
-        suffix = self.suffix_entry.get()
-        mode = self.mode_var.get()
+
+    def _encode_files(self, files, command_template: str) -> None:
+        dry_run = self.dry_run_cb.isChecked()
+        skip_existing = self.skip_cb.isChecked()
+        suffix = self.suffix_entry.text()
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
-        
-        # Track batch statistics
-        batch_start_time = time.time()
         completed_count = 0
         skipped_count = 0
         error_count = 0
-        
         for i, file_data in enumerate(files):
             if not self.is_encoding:
                 break
-            
             source_file = Path(file_data["path"])
-
             if file_data.get("tracks_from_user"):
-                stored_audio = file_data.get("audio_track")
-                if stored_audio is None:
-                    self._on_log(
-                        "ERROR",
-                        f"No audio track set for {source_file.name} (Set tracks chose no audio).",
-                    )
+                if file_data.get("audio_track") is None:
+                    self._on_log("ERROR", f"No audio track set for {source_file.name}")
                     file_data["status"] = "Error"
                     error_count += 1
                     continue
-                effective_audio = stored_audio
+                effective_audio = file_data["audio_track"]
                 subtitle_track = file_data.get("subtitle_track")
-                self._on_log(
-                    "INFO",
-                    f"Using tracks from file list for: {source_file.name}",
-                )
-                file_data["audio_track"] = effective_audio
-                file_data["subtitle_track"] = subtitle_track
+                self._on_log("INFO", f"Using tracks from file list for: {source_file.name}")
             else:
                 self._on_log("INFO", f"Analyzing tracks for: {source_file.name}")
                 tracks = self.track_analyzer.analyze_tracks(source_file)
-
                 if tracks.get("error"):
                     self._on_log("ERROR", f"Track analysis failed: {tracks['error']}")
                     file_data["status"] = "Error"
                     error_count += 1
                     continue
-
                 effective_audio, subtitle_track = compute_effective_tracks(
                     tracks,
                     self.track_analyzer,
@@ -1026,12 +820,8 @@ class FFmpegTab(ctk.CTkFrame):
                     source_label=source_file.name,
                 )
                 if not effective_audio:
-                    self._on_log(
-                        "WARNING",
-                        f"No English audio track found: {source_file.name}",
-                    )
+                    self._on_log("WARNING", f"No English audio: {source_file.name}")
                     file_data["status"] = "Skipped"
-                    
                     if self.batch_stats:
                         self.batch_stats.add_file_result(
                             filename=source_file.name,
@@ -1039,33 +829,23 @@ class FFmpegTab(ctk.CTkFrame):
                             input_size=0,
                             output_size=0,
                             success=False,
-                            skipped=True
+                            skipped=True,
                         )
-                    
                     skipped_count += 1
                     continue
-
                 file_data["audio_track"] = effective_audio
                 file_data["subtitle_track"] = subtitle_track
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
-            
-            # Get output path from files tab
-            if self.get_output_path_callback:
-                output_dir = self.get_output_path_callback(source_file)
-            else:
-                output_dir = source_file.parent
+            output_dir = (
+                self.get_output_path_callback(source_file)
+                if self.get_output_path_callback
+                else source_file.parent
+            )
             output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
-            
-            # Check if output exists
-            if (
-                skip_existing
-                and not file_data.get("reencode", False)
-                and output_file.exists()
-            ):
+            if skip_existing and not file_data.get("reencode", False) and output_file.exists():
                 self._on_log("INFO", f"Skipping (exists): {output_file.name}")
                 file_data["status"] = "Skipped"
-                
                 if self.batch_stats:
                     self.batch_stats.add_file_result(
                         filename=source_file.name,
@@ -1073,430 +853,126 @@ class FFmpegTab(ctk.CTkFrame):
                         input_size=0,
                         output_size=0,
                         success=False,
-                        skipped=True
+                        skipped=True,
                     )
-                
                 skipped_count += 1
                 continue
-            
-            # Update status
             file_data["status"] = "Encoding"
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
-            
-            # Extract subtitle when we have a selected track (Signs & Songs when toggle off, or Signs & Songs / first English when toggle on)
             subtitle_file = None
             if subtitle_track is not None and not dry_run:
-                subtitle_stream_id = subtitle_track  # 0-based
-                self._on_log("INFO", f"Extracting subtitle stream {subtitle_stream_id} (HandBrake track {subtitle_stream_id + 1})")
-                subtitle_file, subtitle_extract_error = extract_subtitle_stream(
+                subtitle_file, err = extract_subtitle_stream(
                     ffmpeg_path=ffmpeg_path,
                     input_file=source_file,
-                    subtitle_stream_id=subtitle_stream_id
+                    subtitle_stream_id=subtitle_track,
                 )
-                if subtitle_file and subtitle_file.exists():
-                    file_size = subtitle_file.stat().st_size
-                    self._on_log("INFO", f"Extracted subtitle to: {subtitle_file} ({file_size} bytes)")
-                    if file_size == 0:
-                        self._on_log("WARNING", "Subtitle file is empty, subtitles may not appear")
-                        subtitle_file = None  # Don't use empty file
-                else:
-                    warn = (
-                        f"Failed to extract subtitle stream {subtitle_stream_id} "
-                        f"(HandBrake track {subtitle_stream_id + 1}) or file does not exist"
-                    )
-                    if subtitle_extract_error:
-                        warn += f": {subtitle_extract_error}"
-                    self._on_log("WARNING", warn)
+                if subtitle_file and subtitle_file.exists() and subtitle_file.stat().st_size == 0:
                     subtitle_file = None
-            
-            # Get command from textbox (user may have edited it)
-            command_template = self.cmd_text.get("1.0", "end-1c").strip()
+                elif not subtitle_file:
+                    self._on_log("WARNING", f"Subtitle extract issue: {err or 'unknown'}")
             if not command_template:
-                self._on_log("ERROR", "No FFmpeg command found in textbox")
-                file_data["status"] = "Error"
+                self._on_log("ERROR", "No FFmpeg command")
                 error_count += 1
-                if self.update_file_callback:
-                    self.update_file_callback(i, file_data)
                 continue
-            
-            self._on_log("INFO", f"Parsing FFmpeg command...")
-            
-            # Replace placeholders in the command with actual file paths
             try:
-                ffmpeg_args = self._parse_and_substitute_command(
+                ffmpeg_args = parse_and_substitute_command(
                     command_template,
                     source_file,
                     output_file,
                     effective_audio,
                     subtitle_track,
-                    subtitle_file
+                    subtitle_file,
+                    lambda lev, msg: self._on_log(lev, msg),
                 )
                 if not ffmpeg_args:
-                    self._on_log("ERROR", "Command parsing resulted in empty arguments")
                     file_data["status"] = "Error"
                     error_count += 1
-                    if self.update_file_callback:
-                        self.update_file_callback(i, file_data)
                     continue
-                self._on_log("INFO", f"Command parsed successfully ({len(ffmpeg_args)} arguments)")
             except Exception as e:
-                self._on_log("ERROR", f"Failed to parse command: {str(e)}")
-                import traceback
-                self._on_log("ERROR", f"Traceback: {traceback.format_exc()}")
+                self._on_log("ERROR", str(e))
                 file_data["status"] = "Error"
                 error_count += 1
-                if self.update_file_callback:
-                    self.update_file_callback(i, file_data)
                 continue
-            
-            # Encode with timing
-            self._on_log("INFO", f"Starting encoding to: {output_file.name}")
             self._progress_ui_throttle_last = None
-            file_start_time = time.time()
+            t0 = time.time()
             try:
-                success = self.encoder.encode_with_ffmpeg(
+                ok = self.encoder.encode_with_ffmpeg(
                     input_file=source_file,
                     output_file=output_file,
                     ffmpeg_args=ffmpeg_args,
                     subtitle_file=subtitle_file,
                     subtitle_stream_index=subtitle_track,
-                    dry_run=dry_run
+                    dry_run=dry_run,
                 )
             except Exception as e:
-                self._on_log("ERROR", f"Encoding failed with exception: {str(e)}")
-                import traceback
-                self._on_log("ERROR", f"Traceback: {traceback.format_exc()}")
-                success = False
-            
-            file_elapsed_time = time.time() - file_start_time
-            
-            # Clean up subtitle file
+                self._on_log("ERROR", str(e))
+                ok = False
+            elapsed = time.time() - t0
             if subtitle_file and subtitle_file.exists():
                 try:
                     subtitle_file.unlink()
                 except Exception:
                     pass
-            
-            if success:
+            if ok:
                 file_data["status"] = "Complete"
                 file_data["reencode"] = False
-                input_size = source_file.stat().st_size if source_file.exists() else 0
-                output_size = 0
+                out_sz = 0
                 if output_file.exists():
                     file_data["output_path"] = output_file
-                    output_size = output_file.stat().st_size
-                    file_data["output_size"] = output_size
-                
-                # Record statistics
+                    out_sz = output_file.stat().st_size
+                    file_data["output_size"] = out_sz
                 if self.batch_stats:
                     self.batch_stats.add_file_result(
                         filename=source_file.name,
-                        elapsed=file_elapsed_time,
-                        input_size=input_size,
-                        output_size=output_size,
-                        success=True
+                        elapsed=elapsed,
+                        input_size=source_file.stat().st_size if source_file.exists() else 0,
+                        output_size=out_sz,
+                        success=True,
                     )
-                
                 completed_count += 1
             else:
                 file_data["status"] = "Error"
-                
                 if self.batch_stats:
                     self.batch_stats.add_file_result(
                         filename=source_file.name,
-                        elapsed=file_elapsed_time,
+                        elapsed=elapsed,
                         input_size=0,
                         output_size=0,
                         success=False,
-                        error_msg="Encoding failed"
+                        error_msg="failed",
                     )
-                
                 error_count += 1
-            
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
-            
-            # Calculate and display batch ETA if enough files completed
             if self.batch_stats and completed_count >= 3:
                 eta = self.batch_stats.calculate_batch_eta(len(files), completed_count)
                 if eta:
                     self._on_log("INFO", f"Batch ETA: {eta}")
-                    
-                    # Also update progress display with ETA
-                    def update_eta():
-                        current_status = self.progress_display.status_label.cget("text")
-                        # Only update if ETA not already in the status
-                        if "Batch ETA" not in current_status:
-                            self.progress_display.set_status(f"Batch ETA: {eta}")
-                    
-                    self._marshal_ui_update(update_eta)
-        
-        # Calculate elapsed time and send completion notification
+                    if "Batch ETA" not in self.progress_display.get_status():
+                        self._bridge.status_text.emit(f"Batch ETA: {eta}")
         if self.batch_stats:
             summary = self.batch_stats.summary_text()
-            
-            # Show summary as in-app toast
-            def show_summary():
-                widget = self.master
-                max_depth = 10
-                depth = 0
-                
-                while widget and depth < max_depth:
-                    if hasattr(widget, "toast_manager"):
-                        toast_type = "error" if error_count > 0 else "success"
-                        widget.toast_manager.show(summary, message_type=toast_type, duration=5)
-                        return
-                    widget = getattr(widget, "master", None)
-                    depth += 1
-            
-            self._marshal_ui_update(show_summary)
-            
-            # Also send via notification system (displays in app-managed toasts)
+            self._bridge.toast.emit(summary, "error" if error_count > 0 else "success")
             BatchNotification.send_completion(
                 completed=completed_count,
                 skipped=skipped_count,
                 errors=error_count,
                 total=self.batch_stats.get_total_files(),
-                elapsed_time=self.batch_stats.get_elapsed_time_str()
+                elapsed_time=self.batch_stats.get_elapsed_time_str(),
             )
-        
-        # Reset UI — marshal to main thread to avoid Tk threading issues
-        self._marshal_ui_update(self._reset_ui_on_encode_end)
-    
-    def _stop_encoding(self):
-        """Stop encoding (runs in background thread to avoid UI freeze)"""
-        # Run stop in a background thread to prevent UI freeze
-        def stop_worker():
+        self._bridge.reset_ui.emit()
+
+    def _reset_ui_on_encode_end(self) -> None:
+        self.is_encoding = False
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.progress_display.reset()
+
+    def _stop_encoding(self) -> None:
+        def w():
             if self.encoder:
                 self.encoder.stop()
             self.is_encoding = False
-        
-        # Use daemon thread so it doesn't block the UI
-        threading.Thread(target=stop_worker, daemon=True).start()
-    
-    def _on_progress(self, progress: EncodingProgress):
-        """Handle progress update — marshal to main thread (throttled to limit UI load)."""
-        now = time.monotonic()
-        min_interval = 0.2
-        near_complete = progress.percent is not None and progress.percent >= 100.0
-        if (
-            self._progress_ui_throttle_last is not None
-            and (now - self._progress_ui_throttle_last) < min_interval
-            and not near_complete
-        ):
-            return
-        self._progress_ui_throttle_last = now
 
-        def update_progress():
-            if progress.percent is not None:
-                self.progress_display.set_progress(progress.percent)
-                status = f"{progress.percent:.1f}%"
-                if progress.eta:
-                    status += f" - ETA: {progress.eta}"
-                self.progress_display.set_status(status)
-            elif progress.time:
-                status = f"Time: {progress.time}"
-                if progress.speed:
-                    status += f" - Speed: {progress.speed:.2f}x"
-                self.progress_display.set_status(status)
-
-        self._marshal_ui_update(update_progress)
-    
-    def _parse_and_substitute_command(
-        self,
-        command_template: str,
-        input_file: Path,
-        output_file: Path,
-        audio_track: int,
-        subtitle_track: Optional[int],
-        subtitle_file: Optional[Path]
-    ) -> List[str]:
-        """Parse command string and substitute placeholders with actual values"""
-        # Replace common placeholders
-        command = command_template
-
-        # FFmpeg 8+ removed the scale filter 'si' (scale interpolation) option; strip it so saved commands work
-        command = re.sub(r'(scale=[^,\s\'"]+):si=\d+', r'\1', command)
-
-        # Helper function to escape backslashes for regex replacement
-        # Windows paths like C:\Users need backslashes escaped to avoid \U being interpreted as Unicode escape
-        def escape_for_replacement(path_str: str) -> str:
-            return path_str.replace('\\', '\\\\')
-        
-        # Helper function to quote paths with spaces for command string
-        def quote_path_if_needed(path_str: str) -> str:
-            """Quote path if it contains spaces, for proper shlex.split() handling"""
-            if ' ' in path_str:
-                return f'"{path_str}"'
-            return path_str
-        
-        input_file_str = str(input_file)
-        output_file_str = str(output_file)
-        
-        # Quote paths with spaces
-        input_file_quoted = quote_path_if_needed(input_file_str)
-        output_file_quoted = quote_path_if_needed(output_file_str)
-        
-        # Escape backslashes for regex replacement
-        input_file_escaped = escape_for_replacement(input_file_quoted)
-        output_file_escaped = escape_for_replacement(output_file_quoted)
-        
-        # Replace input file placeholders
-        command = re.sub(r'\binput\.mkv\b', input_file_escaped, command, flags=re.IGNORECASE)
-        command = re.sub(r'\{INPUT\}', input_file_escaped, command)
-        command = re.sub(r'<INPUT>', input_file_escaped, command)
-        
-        # Replace output file placeholders
-        command = re.sub(r'\boutput\.mp4\b', output_file_escaped, command, flags=re.IGNORECASE)
-        command = re.sub(r'\{OUTPUT\}', output_file_escaped, command)
-        command = re.sub(r'<OUTPUT>', output_file_escaped, command)
-        
-        # Replace audio track placeholder
-        command = re.sub(r'\{AUDIO_TRACK\}', str(audio_track), command)
-        command = re.sub(r'<AUDIO_TRACK>', str(audio_track), command)
-        
-        # Replace audio stream mapping with correct stream ID
-        # Convert audio_track (1-indexed mkvmerge track ID) to 0-indexed FFmpeg stream ID
-        audio_stream_id = audio_track - 1
-        # Replace the audio mapping that appears after the video mapping
-        # Pattern: -map 0:v:0 followed by -map 0:N (where N is the old audio stream ID)
-        # This ensures we only update the audio mapping, not the video mapping
-        command = re.sub(
-            r'(-map\s+0:v:0\s+)-map\s+0:\d+',
-            rf'\1-map 0:{audio_stream_id}',
-            command
-        )
-        
-        # Replace subtitle track placeholder
-        if subtitle_track is not None:
-            command = re.sub(r'\{SUBTITLE_TRACK\}', str(subtitle_track), command)
-            command = re.sub(r'<SUBTITLE_TRACK>', str(subtitle_track), command)
-        
-        # Replace subtitle file placeholder
-        if subtitle_file:
-            # Use the shared helper for correct two-level FFmpeg lavfi escaping:
-            #   Level 1 (option value): forward-slash normalisation, \' for single-quote, \: for colon
-            #   Level 2 (filtergraph):  \[ \] \; \, for filtergraph meta-characters
-            # Using a lambda avoids re.sub mis-interpreting backslashes in the replacement string.
-            sub_path = _escape_ffmpeg_filter_path(str(subtitle_file))
-            command = re.sub(r'\{SUBTITLE_FILE\}', lambda m: sub_path, command)
-            command = re.sub(r'<SUBTITLE_FILE>', lambda m: sub_path, command)
-        else:
-            # Remove subtitle filter if no subtitle file is available
-            # Remove ",subtitles='{SUBTITLE_FILE}'" or ",subtitles='<SUBTITLE_FILE>'" from filter chain
-            command = re.sub(r",\s*subtitles=['\"](?:\{SUBTITLE_FILE\}|<SUBTITLE_FILE>)['\"]", "", command)
-            # Also handle case where subtitle filter is first in chain (shouldn't happen, but just in case)
-            command = re.sub(r"subtitles=['\"](?:\{SUBTITLE_FILE\}|<SUBTITLE_FILE>)['\"]\s*,", "", command)
-        
-        # If command still contains "input.mkv" or "output.mp4" as literal paths, replace them
-        # This handles the case where the preset generated command has placeholders in quotes
-        if "input.mkv" in command.lower() or "output.mp4" in command.lower():
-            # Try to find and replace the actual file paths in quotes
-            # Use the already-quoted versions we created earlier
-            command = re.sub(r'"input\.mkv"', input_file_escaped, command, flags=re.IGNORECASE)
-            command = re.sub(r'"output\.mp4"', output_file_escaped, command, flags=re.IGNORECASE)
-            # For single quotes, we still need to quote the paths
-            input_single_quoted = escape_for_replacement(f"'{input_file_str}'")
-            output_single_quoted = escape_for_replacement(f"'{output_file_str}'")
-            command = re.sub(r"'input\.mkv'", input_single_quoted, command, flags=re.IGNORECASE)
-            command = re.sub(r"'output\.mp4'", output_single_quoted, command, flags=re.IGNORECASE)
-        
-        # Warn if any placeholder was never resolved (e.g. a typo in a hand-edited command).
-        # Passing a literal "{INPUT}" to FFmpeg silently fails with a confusing "No such file" error.
-        _remaining = re.findall(r'\{[A-Z_]+\}|<[A-Z_]+>', command)
-        if _remaining:
-            self._on_log(
-                "WARNING",
-                f"Unresolved placeholder(s) in command — encoding may fail: "
-                f"{', '.join(dict.fromkeys(_remaining))}",
-            )
-
-        # Parse the command string into a list of arguments
-        # Use shlex to properly handle quoted arguments
-        # Note: When passing a list to subprocess.Popen(), quotes are NOT needed - each element is a separate argument
-        try:
-            args = shlex.split(command, posix=False)  # posix=False for Windows compatibility
-            # shlex.split() removes outer quotes but preserves inner quotes (like in filter syntax)
-            # This is correct - the quotes in subtitles='path' are part of the filter syntax and should be preserved
-        except Exception as e:
-            # Fallback: simple split if shlex fails (but this won't handle spaces correctly)
-            self._on_log("WARNING", f"shlex.split() failed: {e}, using fallback parsing")
-            args = command.split()
-            # Still strip quotes in fallback
-            args = [arg.strip('"').strip("'") for arg in args]
-        
-        # Strip quotes from file paths (shlex should do this, but ensure it's done)
-        # FFmpeg doesn't expect quotes in file paths when using a list of arguments
-        for i, arg in enumerate(args):
-            # Strip quotes from input file (after -i)
-            if arg == "-i" and i + 1 < len(args):
-                input_path = args[i + 1].strip('"').strip("'")
-                if not Path(input_path).exists():
-                    self._on_log("ERROR", f"Input file does not exist: {input_path}")
-                args[i + 1] = input_path
-            # Strip quotes from output file (last argument or after -y)
-            elif arg == "-y" and i + 1 < len(args):
-                args[i + 1] = args[i + 1].strip('"').strip("'")
-            # Also check if last argument is a file path (output file)
-            elif i == len(args) - 1 and (arg.endswith('.mp4') or arg.endswith('.mkv') or arg.endswith('.avi')):
-                args[i] = arg.strip('"').strip("'")
-        
-        if not args:
-            return []
-
-        ffmpeg_executable = (config.get_ffmpeg_path() or "").strip() or "ffmpeg"
-        first_name = Path(args[0]).name.lower()
-        configured_name = Path(ffmpeg_executable).name.lower()
-        allowed_first = {"ffmpeg", "ffmpeg.exe"}
-        if configured_name:
-            allowed_first.add(configured_name)
-        if first_name not in allowed_first:
-            raise ValueError(
-                "Command must start with ffmpeg or ffmpeg.exe, or the FFmpeg executable "
-                "configured in Settings (first argument was not recognized as FFmpeg)."
-            )
-        args[0] = ffmpeg_executable
-
-        return args
-    
-    def _on_log(self, level: str, message: str):
-        """Handle log message — marshal to main thread"""
-        if level == "DEBUG" and not config.get_debug_logging():
-            return
-        
-        def update_log():
-            self.log_viewer.add_log(level, message)
-        
-        def log_to_file():
-            prefixed_message = f"[FFmpeg] {message}"
-            if level == "ERROR":
-                logger.error(prefixed_message)
-            elif level == "WARNING":
-                logger.warning(prefixed_message)
-            elif level == "SUCCESS":
-                logger.success(prefixed_message)
-            elif level == "DEBUG":
-                logger.debug(prefixed_message)
-            else:  # INFO or default
-                logger.info(prefixed_message)
-        
-        # Marshal log viewer update to main thread
-        self._marshal_ui_update(update_log)
-        # File logging can happen on the worker thread (no Tk involvement)
-        log_to_file()
-    
-    def _show_toast(self, message: str, message_type: str = "info") -> None:
-        """Show in-app toast notification"""
-        # Traverse up the widget hierarchy to find MainWindow
-        widget = self.master
-        max_depth = 10
-        depth = 0
-        
-        while widget and depth < max_depth:
-            if hasattr(widget, "toast_manager"):
-                widget.toast_manager.show(message, message_type=message_type, duration=3)
-                return
-            widget = getattr(widget, "master", None)
-            depth += 1
-
+        threading.Thread(target=w, daemon=True).start()

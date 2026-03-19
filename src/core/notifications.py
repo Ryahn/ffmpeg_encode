@@ -1,6 +1,6 @@
 """In-app toast notifications for batch encoding completion"""
 
-from typing import Optional, Callable
+from typing import Optional
 
 
 class BatchNotification:

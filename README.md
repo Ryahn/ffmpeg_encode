@@ -26,9 +26,16 @@ A cross-platform Python GUI application for encoding video files using HandBrake
 - **Debug tab**: Analyze individual files to see track information and mkvinfo output
 - **Cross-platform config**: Platform-appropriate config directory handling (Windows: AppData\Local, macOS/Linux: ~/.video_encoder)
 
+## GUI stack (this branch)
+
+Active development for the **PyQt6** UI is on branch **`gui/migration-pyqt6`**. The main app uses **PyQt6** (see `requirements.txt`). In-app toasts use a **QFrame overlay** anchored to the bottom-right of the main window.
+
+The helper script `scripts/move_encoded_shows.py` still uses CustomTkinter; install it separately if you use that script: `pip install customtkinter`.
+
 ## Requirements
 
 - Python 3.8 or higher
+- **PyQt6** (installed via `pip install -r requirements.txt`)
 - FFmpeg (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install via your system package manager, e.g. `apt install ffmpeg`)
 - HandBrake CLI (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install via your package manager, e.g. `apt install handbrake-cli`)
 - MKVToolNix (auto-installed via Chocolatey/Homebrew on Windows/macOS; on Linux install the package that provides `mkvinfo`, e.g. `apt install mkvtoolnix`)
@@ -85,14 +92,19 @@ To build executables locally:
 pip install pyinstaller
 ```
 
-2. Build using the spec file:
+2. Build using the spec file (repo root):
 ```bash
 pyinstaller build.spec
 ```
 
-The executable will be in the `dist/` directory:
-- **Windows**: `dist/ffmpeg_encode.exe` (portable) or `dist_installer/ffmpeg_encode-Setup.exe` (installer created with Inno Setup)
-- **macOS**: `dist/ffmpeg_encode` (executable) or `dist/ffmpeg_encode.dmg` (disk image)
+This produces a **one-folder** bundle (PyQt6 hooks pull in Qt DLLs/plugins on Windows):
+
+- **Windows**: `dist/ffmpeg_encode/ffmpeg_encode.exe` — run that `.exe` inside the folder (keep the whole `ffmpeg_encode` directory).
+- **macOS / Linux**: `dist/ffmpeg_encode/ffmpeg_encode` (same idea: distribute the folder).
+
+**Smoke test:** Launch the built app once and open every tab; run a **Dry Run** encode if possible. If the window is blank or Qt fails to load, ensure PyInstaller is recent enough for your Python version and that you did not move the `.exe` out of the bundle folder.
+
+**Hidden imports:** `build.spec` lists `gui.*` and `core.*` modules used by the PyQt6 UI so analysis does not drop optional code paths.
 
 **Windows Installer**: The build process automatically creates an installer using Inno Setup when building on Windows. The installer provides a standard Windows installation experience.
 

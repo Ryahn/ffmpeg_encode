@@ -1,209 +1,191 @@
-"""Main application window"""
+"""Main application window (PyQt6)."""
+
+from __future__ import annotations
 
 import sys
-import customtkinter as ctk
 from pathlib import Path
 from typing import Optional
 
-from .tabs.files_tab import FilesTab
-from .tabs.handbrake_tab import HandBrakeTab
-from .tabs.ffmpeg_tab import FFmpegTab
-from .tabs.settings_tab import SettingsTab
-from .tabs.debug_tab import DebugTab
-from .tabs.about_tab import AboutTab
-from .theme import APP_BG, APP_TEXT_DIM, prime_monospace_font
-from .widgets.toast import ToastManager
-from core.package_manager import PackageManager
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QCloseEvent, QIcon, QResizeEvent
+from PyQt6.QtWidgets import (
+    QMainWindow,
+    QStatusBar,
+    QTabWidget,
+    QWidget,
+    QVBoxLayout,
+)
+
 from core.notifications import BatchNotification
+from core.package_manager import PackageManager
 from utils.config import config
 from utils.logger import logger
 
+from .tabs.about_tab import AboutTab
+from .tabs.debug_tab import DebugTab
+from .tabs.files_tab import FilesTab
+from .tabs.ffmpeg_tab import FFmpegTab
+from .tabs.handbrake_tab import HandBrakeTab
+from .tabs.settings_tab import SettingsTab
+from .widgets.toast import ToastManager
 
-class MainWindow(ctk.CTk):
-    """Main application window"""
-    
+
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        
-        # Configure window
-        self.title("Video Encoder")
-        self.geometry("1200x800")
-        self.configure(fg_color=APP_BG)
-        prime_monospace_font(self)
-        
-        # Set window icon
+        self.setWindowTitle("Video Encoder")
+        self.resize(1200, 800)
         self._set_icon()
-        
-        # Initialize toast manager and notifications
+
         self.toast_manager = ToastManager(self)
         BatchNotification.set_toast_manager(self.toast_manager)
-        
-        # Initialize package manager
+
         self.package_manager = PackageManager()
-        
-        # Check for required tools
         self._check_dependencies()
-        
-        # Create tabs
-        self.tabview = ctk.CTkTabview(self)
-        self.tabview.pack(fill="both", expand=True, padx=14, pady=14)
-        
-        # Files tab
-        self.tabview.add("Files")
-        tab_frame = self.tabview.tab("Files")
-        self.files_tab = FilesTab(tab_frame)
-        self.files_tab.pack(fill="both", expand=True)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(14, 14, 14, 0)
+
+        self.tab_widget = QTabWidget()
+        layout.addWidget(self.tab_widget)
+
+        self.files_tab = FilesTab()
+        self.tab_widget.addTab(self.files_tab, "Files")
         self.files_tab.on_files_changed = self._on_files_changed
         self.files_tab.on_status = self._update_status
-        
-        # HandBrake tab
-        self.tabview.add("HandBrake")
-        tab_frame = self.tabview.tab("HandBrake")
-        self.handbrake_tab = HandBrakeTab(tab_frame)
-        self.handbrake_tab.pack(fill="both", expand=True)
+
+        self.handbrake_tab = HandBrakeTab()
+        self.tab_widget.addTab(self.handbrake_tab, "HandBrake")
         self.handbrake_tab.get_files_callback = self._get_files
         self.handbrake_tab.update_file_callback = self._update_file
         self.handbrake_tab.get_output_path_callback = self._get_output_path
-        
-        # FFmpeg tab
-        self.tabview.add("FFmpeg")
-        tab_frame = self.tabview.tab("FFmpeg")
-        self.ffmpeg_tab = FFmpegTab(tab_frame)
-        self.ffmpeg_tab.pack(fill="both", expand=True)
+        self.handbrake_tab.main_window = self
+
+        self.ffmpeg_tab = FFmpegTab()
+        self.tab_widget.addTab(self.ffmpeg_tab, "FFmpeg")
         self.ffmpeg_tab.get_files_callback = self._get_files
         self.ffmpeg_tab.update_file_callback = self._update_file
         self.ffmpeg_tab.get_output_path_callback = self._get_output_path
-        
-        # Settings tab
-        self.tabview.add("Settings")
-        tab_frame = self.tabview.tab("Settings")
-        self.settings_tab = SettingsTab(tab_frame)
-        self.settings_tab.pack(fill="both", expand=True)
-        
-        # Debug tab
-        self.tabview.add("Debug")
-        tab_frame = self.tabview.tab("Debug")
-        self.debug_tab = DebugTab(tab_frame)
-        self.debug_tab.pack(fill="both", expand=True)
-        
-        # About tab
-        self.tabview.add("About")
-        tab_frame = self.tabview.tab("About")
-        self.about_tab = AboutTab(tab_frame)
-        self.about_tab.pack(fill="both", expand=True)
-        
-        # Status bar
-        self.status_bar = ctk.CTkLabel(
-            self,
-            text="Ready",
-            anchor="w",
-            text_color=APP_TEXT_DIM,
-        )
-        self.status_bar.pack(fill="x", side="bottom", padx=14, pady=(0, 8))
-        
-        # Update status
+        self.ffmpeg_tab.main_window = self
+
+        self.settings_tab = SettingsTab()
+        self.tab_widget.addTab(self.settings_tab, "Settings")
+
+        self.debug_tab = DebugTab()
+        self.tab_widget.addTab(self.debug_tab, "Debug")
+
+        self.about_tab = AboutTab()
+        self.tab_widget.addTab(self.about_tab, "About")
+
+        self._tab_index_files = self.tab_widget.indexOf(self.files_tab)
+        self._tab_index_settings = self.tab_widget.indexOf(self.settings_tab)
+        self._tab_index_ffmpeg = self.tab_widget.indexOf(self.ffmpeg_tab)
+        self._tab_index_debug = self.tab_widget.indexOf(self.debug_tab)
+        self.debug_tab.attach_follow_logging(self.tab_widget, self._tab_index_debug)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        self.settings_tab.main_window = self
+
+        self._status = QStatusBar()
+        self.setStatusBar(self._status)
         self._update_status()
-    
-    def _set_icon(self):
-        """Set the window icon"""
+
+    def _set_icon(self) -> None:
         try:
-            if getattr(sys, 'frozen', False):
-                # Running as a bundled executable
-                icon_path = Path(sys._MEIPASS) / 'gui' / 'icon.ico'
+            if getattr(sys, "frozen", False):
+                icon_path = Path(sys._MEIPASS) / "gui" / "icon.ico"
             else:
-                # Running as a normal Python script
-                icon_path = Path(__file__).parent / 'icon.ico'
-            
+                icon_path = Path(__file__).parent / "icon.ico"
             if icon_path.exists():
-                self.iconbitmap(str(icon_path))
+                self.setWindowIcon(QIcon(str(icon_path)))
         except Exception as e:
             logger.warning(f"Could not set window icon: {e}")
-    
-    def _check_dependencies(self):
-        """Check for required dependencies"""
+
+    def _check_dependencies(self) -> None:
         missing = []
-        
-        # Check FFmpeg
         found, path = self.package_manager.check_ffmpeg()
         if not found:
             missing.append("FFmpeg")
-        else:
-            if not config.get_ffmpeg_path():
-                config.set_ffmpeg_path(path)
-        
-        # Check HandBrake
+        elif not config.get_ffmpeg_path():
+            config.set_ffmpeg_path(path)
         found, path = self.package_manager.check_handbrake()
         if not found:
             missing.append("HandBrake CLI")
-        else:
-            if not config.get_handbrake_path():
-                config.set_handbrake_path(path)
-        
-        # Check mkvinfo
+        elif not config.get_handbrake_path():
+            config.set_handbrake_path(path)
         found, path = self.package_manager.check_mkvinfo()
         if not found:
             missing.append("mkvinfo (MKVToolNix)")
-        else:
-            if not config.get_mkvinfo_path():
-                config.set_mkvinfo_path(path)
-        
+        elif not config.get_mkvinfo_path():
+            config.set_mkvinfo_path(path)
         if missing:
             logger.warning(f"Missing dependencies: {', '.join(missing)}")
-            # TODO: Show dialog offering to install
-    
+
     def _get_files(self):
-        """Get files from files tab"""
         return self.files_tab.get_files()
-    
-    def _update_file(self, index: int, file_data: dict):
-        """Update file in file list"""
+
+    def _update_file(self, index: int, file_data: dict) -> None:
         self.files_tab.file_list.update_file(index, **file_data)
-    
+
     def _get_output_path(self, source_file: Path) -> Path:
-        """Get output path for a source file"""
         return self.files_tab.get_output_path(source_file)
-    
-    def _on_files_changed(self):
-        """Handle files list change"""
+
+    def _on_files_changed(self) -> None:
         files = self.files_tab.get_files()
-        count = len(files)
-        self._update_status(f"{count} file(s) ready")
-        # Notify FFmpeg tab to update preview
-        if hasattr(self.ffmpeg_tab, 'on_files_changed'):
+        self._update_status(f"{len(files)} file(s) ready")
+        if hasattr(self.handbrake_tab, "on_files_changed"):
+            self.handbrake_tab.on_files_changed()
+        if hasattr(self.ffmpeg_tab, "on_files_changed"):
             self.ffmpeg_tab.on_files_changed()
-    
-    def _update_status(self, message: Optional[str] = None):
-        """Update status bar"""
+
+    def _update_status(self, message: Optional[str] = None) -> None:
         if message:
-            self.status_bar.configure(text=message)
+            self._status.showMessage(message)
         else:
-            files = self.files_tab.get_files()
-            count = len(files)
-            self.status_bar.configure(text=f"Ready - {count} file(s) in queue")
-    
-    def run(self):
-        """Run the application"""
-        def on_close() -> None:
-            # Stop any active encoders to ensure child processes are terminated
-            try:
-                if self.ffmpeg_tab and hasattr(self.ffmpeg_tab, 'is_encoding'):
-                    if self.ffmpeg_tab.is_encoding and hasattr(self.ffmpeg_tab, 'encoder'):
-                        logger.info("Stopping FFmpeg encoder on window close")
-                        self.ffmpeg_tab.encoder.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping FFmpeg encoder: {e}")
-            
-            try:
-                if self.handbrake_tab and hasattr(self.handbrake_tab, 'is_encoding'):
-                    if self.handbrake_tab.is_encoding and hasattr(self.handbrake_tab, 'encoder'):
-                        logger.info("Stopping HandBrake encoder on window close")
-                        self.handbrake_tab.encoder.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping HandBrake encoder: {e}")
-            
-            config.flush()
-            self.destroy()
+            n = len(self.files_tab.get_files())
+            self._status.showMessage(f"Ready - {n} file(s) in queue")
 
-        self.protocol("WM_DELETE_WINDOW", on_close)
-        self.mainloop()
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.toast_manager.reposition_active_toast()
 
+    def _on_tab_changed(self, index: int) -> None:
+        if index == self._tab_index_files:
+            self.files_tab.reload_from_config()
+        elif index == self._tab_index_settings:
+            self.settings_tab.reload_from_config()
+        elif index == self._tab_index_ffmpeg:
+            self.ffmpeg_tab.apply_audio_normalize_settings_from_config()
+        elif index == self._tab_index_debug:
+            self.debug_tab.reload_from_config()
+
+    def refresh_encoder_clients(self) -> None:
+        """Recreate encoders/analyzers after tool paths change in Settings."""
+        try:
+            if hasattr(self.handbrake_tab, "_init_encoder"):
+                self.handbrake_tab._init_encoder()
+            if hasattr(self.ffmpeg_tab, "_init_encoder"):
+                self.ffmpeg_tab._init_encoder()
+        except Exception as e:
+            logger.warning(f"Could not refresh encoder clients: {e}")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        try:
+            if self.ffmpeg_tab and getattr(self.ffmpeg_tab, "is_encoding", False):
+                enc = getattr(self.ffmpeg_tab, "encoder", None)
+                if enc:
+                    logger.info("Stopping FFmpeg encoder on window close")
+                    enc.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping FFmpeg encoder: {e}")
+        try:
+            if self.handbrake_tab and getattr(self.handbrake_tab, "is_encoding", False):
+                enc = getattr(self.handbrake_tab, "encoder", None)
+                if enc:
+                    logger.info("Stopping HandBrake encoder on window close")
+                    enc.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping HandBrake encoder: {e}")
+        config.flush()
+        event.accept()

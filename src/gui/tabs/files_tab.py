@@ -1,16 +1,29 @@
-"""Files tab for managing video files"""
+"""Files tab for managing video files (PyQt6)."""
 
-import threading
+from __future__ import annotations
+
 import logging
-
-import customtkinter as ctk
-from tkinter import filedialog, messagebox, StringVar
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Callable, List, Optional
 
-from ..widgets.file_list import FileListWidget
-from ..widgets.toast import ToastManager
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QVBoxLayout,
+    QWidget,
+)
+
 from ..dialogs.set_tracks_dialog import show_set_tracks_dialog
+from ..widgets.file_list import FileListWidget
 from core.file_scanner import FileScanner
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import compute_effective_tracks
@@ -19,233 +32,207 @@ from utils.config import config
 logger = logging.getLogger(__name__)
 
 
-class FilesTab(ctk.CTkFrame):
-    """Tab for managing files to encode"""
-    
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        
+class _LoadTracksWorker(QObject):
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(list, list, str)
+
+    def __init__(self, indices: List[int], files: list, analyzer: TrackAnalyzer):
+        super().__init__()
+        self._indices = indices
+        self._files = files
+        self._analyzer = analyzer
+
+    def run(self) -> None:
+        failed: List[str] = []
+        results: List[dict] = []
+        scope = "selected" if len(self._indices) < len(self._files) else "all"
+        for pos, idx in enumerate(self._indices):
+            source_file = Path(self._files[idx]["path"])
+            self.progress.emit(pos + 1, len(self._indices), scope)
+            tracks = self._analyzer.analyze_tracks(source_file)
+            if tracks.get("error"):
+                failed.append(source_file.name)
+                continue
+            effective_audio, subtitle_track = compute_effective_tracks(tracks, self._analyzer)
+            if effective_audio is not None:
+                results.append(
+                    {
+                        "idx": idx,
+                        "audio": effective_audio,
+                        "subtitle": subtitle_track,
+                        "no_audio_name": None,
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "idx": idx,
+                        "audio": None,
+                        "subtitle": None,
+                        "no_audio_name": source_file.name,
+                    }
+                )
+        self.finished.emit(results, failed, scope)
+
+
+class FilesTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.scanner = FileScanner()
         self.scan_folder: Optional[Path] = None
         self.output_folder: Optional[Path] = None
-        self.toast_manager: Optional[object] = None
         self.on_files_changed: Optional[Callable] = None
         self.on_status: Optional[Callable[[str], None]] = None
+        self._load_tracks_busy = False
+        self._load_thread: Optional[QThread] = None
 
         mkvinfo_path = config.get_mkvinfo_path() or "mkvinfo"
         self.track_analyzer = TrackAnalyzer(
             mkvinfo_path=mkvinfo_path if mkvinfo_path != "mkvinfo" else None
         )
-        self._load_tracks_busy = False
 
-        # Top controls: two rows so output section has full width and buttons stay visible
-        controls_frame = ctk.CTkFrame(self)
-        controls_frame.pack(fill="x", padx=10, pady=10)
+        root = QVBoxLayout(self)
+        controls = QFrame()
+        cv = QVBoxLayout(controls)
 
-        # Row 1: Scan folder
-        scan_frame = ctk.CTkFrame(controls_frame)
-        scan_frame.pack(fill="x", padx=0, pady=(0, 5))
-        
-        ctk.CTkLabel(scan_frame, text="Scan Folder:").pack(side="left", padx=5)
-        self.scan_folder_label = ctk.CTkLabel(
-            scan_frame,
-            text="Not selected",
-            width=300,
-            anchor="w"
-        )
-        self.scan_folder_label.pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            scan_frame,
-            text="Browse",
-            command=self._browse_scan_folder,
-            width=100
-        ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            scan_frame,
-            text="Scan",
-            command=self._scan_folder,
-            width=100
-        ).pack(side="left", padx=5)
-        
-        # Row 2: Save to + output path (path shrinks so buttons stay in view)
-        output_section = ctk.CTkFrame(controls_frame)
-        output_section.pack(fill="x", padx=0, pady=0)
-        
-        self.output_destination_var = StringVar(value=config.get_output_destination())
-        self.output_destination_var.trace_add("write", self._on_output_destination_changed)
-        
-        ctk.CTkLabel(output_section, text="Save to:").pack(side="left", padx=5)
-        ctk.CTkRadioButton(
-            output_section,
-            variable=self.output_destination_var,
-            value="input_folder",
-            text="Same folder as input file",
-            command=self._on_output_destination_choice
-        ).pack(side="left", padx=5)
-        ctk.CTkRadioButton(
-            output_section,
-            variable=self.output_destination_var,
-            value="custom_folder",
-            text="Output folder",
-            command=self._on_output_destination_choice
-        ).pack(side="left", padx=5)
-        
-        self.output_path_frame = ctk.CTkFrame(output_section)
-        self.output_path_frame.pack(side="left", fill="x", expand=True, padx=5)
-        self.output_folder_label = ctk.CTkLabel(
-            self.output_path_frame,
-            text="Not selected",
-            anchor="w"
-        )
-        self.output_folder_label.pack(side="left", fill="x", expand=True, padx=(5, 2))
-        self.browse_output_btn = ctk.CTkButton(
-            self.output_path_frame,
-            text="Select output folder",
-            command=self._browse_output_folder,
-            width=140
-        )
-        self.browse_output_btn.pack(side="right", padx=2)
-        self.clear_output_btn = ctk.CTkButton(
-            self.output_path_frame,
-            text="Clear",
-            command=self._clear_output_folder,
-            width=60
-        )
-        self.clear_output_btn.pack(side="right", padx=2)
-        
-        # Row 3: Strip leading path segments (only when Output folder is selected)
-        self.strip_frame = ctk.CTkFrame(controls_frame)
-        self.strip_frame.pack(fill="x", padx=0, pady=(5, 0))
-        ctk.CTkLabel(self.strip_frame, text="Strip leading path segments:").pack(side="left", padx=5, pady=5)
-        self.strip_entry = ctk.CTkEntry(self.strip_frame, width=50)
-        self.strip_entry.insert(0, str(config.get_strip_leading_path_segments()))
-        self.strip_entry.pack(side="left", padx=(0, 10), pady=5)
-        self.strip_entry.bind("<KeyRelease>", self._on_strip_changed)
-        self.strip_entry.bind("<FocusOut>", self._on_strip_focus_out)
-        self.preview_label = ctk.CTkLabel(
-            self.strip_frame,
-            text="Result: (select Output folder to see preview)",
-            anchor="w"
-        )
-        self.preview_label.pack(side="left", fill="x", expand=True, padx=5, pady=5)
-        
-        # File list
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Scan Folder:"))
+        self.scan_folder_label = QLabel("Not selected")
+        self.scan_folder_label.setMinimumWidth(300)
+        row1.addWidget(self.scan_folder_label)
+        row1.addWidget(self._btn("Browse", self._browse_scan_folder))
+        row1.addWidget(self._btn("Scan", self._scan_folder))
+        cv.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Save to:"))
+        self._dest_group = QButtonGroup(self)
+        self._radio_input = QRadioButton("Same folder as input file")
+        self._radio_custom = QRadioButton("Output folder")
+        self._dest_group.addButton(self._radio_input)
+        self._dest_group.addButton(self._radio_custom)
+        if config.get_output_destination() == "custom_folder":
+            self._radio_custom.setChecked(True)
+        else:
+            self._radio_input.setChecked(True)
+        self._radio_input.toggled.connect(self._on_destination_toggled)
+        self._radio_custom.toggled.connect(self._on_destination_toggled)
+        row2.addWidget(self._radio_input)
+        row2.addWidget(self._radio_custom)
+        self.output_folder_label = QLabel("Not selected")
+        row2.addWidget(self.output_folder_label, stretch=1)
+        row2.addWidget(self._btn("Select output folder", self._browse_output_folder))
+        row2.addWidget(self._btn("Clear", self._clear_output_folder))
+        cv.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Strip leading path segments:"))
+        self.strip_entry = QLineEdit(str(config.get_strip_leading_path_segments()))
+        self.strip_entry.setMaximumWidth(60)
+        self.strip_entry.textChanged.connect(self._on_strip_changed)
+        row3.addWidget(self.strip_entry)
+        self.preview_label = QLabel("Result: (select Output folder to see preview)")
+        row3.addWidget(self.preview_label, stretch=1)
+        cv.addLayout(row3)
+
+        root.addWidget(controls)
+
         self.file_list = FileListWidget(self)
-        self.file_list.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Bottom controls
-        bottom_frame = ctk.CTkFrame(self)
-        bottom_frame.pack(fill="x", padx=10, pady=10)
-        
-        ctk.CTkButton(
-            bottom_frame,
-            text="Add Files",
-            command=self._add_files,
-            width=100
-        ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            bottom_frame,
-            text="Remove Selected",
-            command=self._remove_selected,
-            width=120
-        ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            bottom_frame,
-            text="Clear All",
-            command=self._clear_all,
-            width=100
-        ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            bottom_frame,
-            text="Select All",
-            command=self._select_all,
-            width=100
-        ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            bottom_frame,
-            text="Deselect All",
-            command=self._deselect_all,
-            width=100
-        ).pack(side="left", padx=5)
+        self.file_list.on_paths_dropped = self._on_paths_dropped
+        root.addWidget(self.file_list, stretch=1)
 
-        batch_frame = ctk.CTkFrame(self)
-        batch_frame.pack(fill="x", padx=10, pady=(0, 10))
-        ctk.CTkButton(
-            batch_frame,
-            text="Set tracks…",
-            command=self._open_set_tracks_dialog,
-            width=110,
-        ).pack(side="left", padx=5)
-        self.load_tracks_btn = ctk.CTkButton(
-            batch_frame,
-            text="Load tracks",
-            command=self._load_tracks,
-            width=110,
-        )
-        self.load_tracks_btn.pack(side="left", padx=5)
-        ctk.CTkButton(
-            batch_frame,
-            text="Mark for re-encode",
-            command=self._mark_for_reencode,
-            width=140,
-        ).pack(side="left", padx=5)
-        ctk.CTkButton(
-            batch_frame,
-            text="Clear re-encode",
-            command=self._clear_reencode_marks,
-            width=120,
-        ).pack(side="left", padx=5)
+        bottom = QHBoxLayout()
+        for text, slot in [
+            ("Add Files", self._add_files),
+            ("Remove Selected", self._remove_selected),
+            ("Clear All", self._clear_all),
+            ("Select All", self._select_all),
+            ("Deselect All", self._deselect_all),
+        ]:
+            bottom.addWidget(self._btn(text, slot))
+        root.addLayout(bottom)
 
-        # Load saved scan folder
+        batch = QHBoxLayout()
+        batch.addWidget(self._btn("Set tracks…", self._open_set_tracks_dialog))
+        self.load_tracks_btn = self._btn("Load tracks", self._load_tracks)
+        batch.addWidget(self.load_tracks_btn)
+        batch.addWidget(self._btn("Mark for re-encode", self._mark_for_reencode))
+        batch.addWidget(self._btn("Clear re-encode", self._clear_reencode_marks))
+        root.addLayout(batch)
+
         last_scan = config.get_last_scan_folder()
         if last_scan and Path(last_scan).exists():
             self.scan_folder = Path(last_scan)
-            self.scan_folder_label.configure(text=str(self.scan_folder))
-        
-        # Load saved output destination and folder
+            self.scan_folder_label.setText(str(self.scan_folder))
         dest = config.get_output_destination()
-        self.output_destination_var.set(dest)
         if dest == "custom_folder":
-            output_folder = config.get_default_output_folder()
-            if output_folder and Path(output_folder).exists():
-                self.output_folder = Path(output_folder)
-                self.output_folder_label.configure(text=str(self.output_folder))
-            else:
-                self.output_folder = None
-                self.output_folder_label.configure(text="Not selected")
-        else:
-            self.output_folder = None
-            self.output_folder_label.configure(text="Not selected")
+            of = config.get_default_output_folder()
+            if of and Path(of).exists():
+                self.output_folder = Path(of)
+                self.output_folder_label.setText(str(self.output_folder))
         self._update_output_path_visibility()
         self._update_preview()
-    
-    def _on_strip_changed(self, event=None):
-        self._apply_strip_value()
-    
-    def _on_strip_focus_out(self, event=None):
-        self._apply_strip_value()
-    
-    def _apply_strip_value(self):
+
+    def reload_from_config(self) -> None:
+        """Refresh paths and strip count from disk config (e.g. after editing Settings)."""
+        mkvinfo_path = config.get_mkvinfo_path() or "mkvinfo"
+        self.track_analyzer = TrackAnalyzer(
+            mkvinfo_path=mkvinfo_path if mkvinfo_path != "mkvinfo" else None
+        )
+        self.strip_entry.blockSignals(True)
+        self.strip_entry.setText(str(config.get_strip_leading_path_segments()))
+        self.strip_entry.blockSignals(False)
+        last_scan = config.get_last_scan_folder()
+        if last_scan and Path(last_scan).exists():
+            self.scan_folder = Path(last_scan)
+            self.scan_folder_label.setText(str(self.scan_folder))
+        else:
+            self.scan_folder = None
+            self.scan_folder_label.setText("Not selected")
+        if config.get_output_destination() == "custom_folder":
+            self._radio_custom.setChecked(True)
+        else:
+            self._radio_input.setChecked(True)
+        of = config.get_default_output_folder()
+        if of and Path(of).exists():
+            self.output_folder = Path(of)
+            self.output_folder_label.setText(str(self.output_folder))
+        else:
+            self.output_folder = None
+            self.output_folder_label.setText("Not selected")
+        self._update_output_path_visibility()
+        self._update_preview()
+
+    def _btn(self, text: str, slot) -> QPushButton:
+        b = QPushButton(text)
+        b.clicked.connect(slot)
+        return b
+
+    def _show_toast(self, message: str, message_type: str = "info") -> None:
+        w = self.window()
+        if hasattr(w, "toast_manager"):
+            w.toast_manager.show(message, message_type=message_type, duration=3)
+
+    def _on_destination_toggled(self) -> None:
+        if self._radio_custom.isChecked():
+            config.set_output_destination("custom_folder")
+        else:
+            config.set_output_destination("input_folder")
+        self._update_output_path_visibility()
+        self._update_preview()
+
+    def _on_strip_changed(self) -> None:
         try:
-            raw = self.strip_entry.get().strip()
+            raw = self.strip_entry.text().strip()
             n = int(raw) if raw else 0
             n = max(0, min(99, n))
             config.set_strip_leading_path_segments(n)
-            if raw != str(n):
-                self.strip_entry.delete(0, "end")
-                self.strip_entry.insert(0, str(n))
         except ValueError:
             pass
         self._update_preview()
-    
+
     def _compute_preview_path(self) -> Optional[str]:
-        if self.output_destination_var.get() != "custom_folder" or not self.output_folder:
+        if not self._radio_custom.isChecked() or not self.output_folder:
             return None
         suffix = config.get_default_output_suffix()
         strip_n = config.get_strip_leading_path_segments()
@@ -259,193 +246,183 @@ class FilesTab(ctk.CTkFrame):
                 if root is not None:
                     roots_seen.add(root)
                     try:
-                        relative_path = source_file.relative_to(root)
-                        relative_dir = relative_path.parent
-                        parts = relative_dir.parts
+                        rel = source_file.relative_to(root)
+                        parts = rel.parent.parts
                         remaining = parts[strip_n:]
-                        if remaining:
-                            output_dir = self.output_folder / Path(*remaining)
-                        else:
-                            output_dir = self.output_folder
-                        result_path = output_dir / f"{source_file.stem}{suffix}.mp4"
-                        previews.append(str(result_path))
+                        od = (
+                            self.output_folder / Path(*remaining)
+                            if remaining
+                            else self.output_folder
+                        )
+                        previews.append(str(od / f"{source_file.stem}{suffix}.mp4"))
                     except ValueError:
-                        output_dir = self.output_folder / source_file.parent.name
-                        previews.append(str(output_dir / f"{source_file.stem}{suffix}.mp4"))
+                        previews.append(
+                            str(self.output_folder / source_file.parent.name / f"{source_file.stem}{suffix}.mp4")
+                        )
+                elif self.scan_folder:
+                    try:
+                        rel = source_file.relative_to(self.scan_folder)
+                        parts = rel.parent.parts
+                        remaining = parts[strip_n:]
+                        od = (
+                            self.output_folder / Path(*remaining)
+                            if remaining
+                            else self.output_folder
+                        )
+                        previews.append(str(od / f"{source_file.stem}{suffix}.mp4"))
+                    except ValueError:
+                        previews.append(str(self.output_folder / f"{source_file.stem}{suffix}.mp4"))
                 else:
-                    if self.scan_folder:
-                        try:
-                            relative_path = source_file.relative_to(self.scan_folder)
-                            relative_dir = relative_path.parent
-                            parts = relative_dir.parts
-                            remaining = parts[strip_n:]
-                            if remaining:
-                                output_dir = self.output_folder / Path(*remaining)
-                            else:
-                                output_dir = self.output_folder
-                            previews.append(str(output_dir / f"{source_file.stem}{suffix}.mp4"))
-                        except ValueError:
-                            previews.append(str(self.output_folder / f"{source_file.stem}{suffix}.mp4"))
-                    else:
-                        output_dir = self.output_folder / source_file.parent.name
-                        previews.append(str(output_dir / f"{source_file.stem}{suffix}.mp4"))
-            if not previews:
-                return str(self.output_folder / f"file{suffix}.mp4") + " (example)"
+                    od = self.output_folder / source_file.parent.name
+                    previews.append(str(od / f"{source_file.stem}{suffix}.mp4"))
             if len(roots_seen) > 1 or len(previews) > 1:
-                return " | ".join(previews) if len(previews) <= 2 else previews[0] + " ..."
-            return previews[0]
+                return " | ".join(previews[:2]) + (" ..." if len(previews) > 2 else "")
+            return previews[0] if previews else str(self.output_folder / f"file{suffix}.mp4") + " (example)"
         parts = ["Subfolder", "Another"]
         remaining = parts[strip_n:] if strip_n < len(parts) else []
-        if remaining:
-            example = self.output_folder / Path(*remaining) / f"file{suffix}.mp4"
+        ex = (
+            self.output_folder / Path(*remaining) / f"file{suffix}.mp4"
+            if remaining
+            else self.output_folder / f"file{suffix}.mp4"
+        )
+        return str(ex) + " (example)"
+
+    def _update_preview(self) -> None:
+        p = self._compute_preview_path()
+        if p:
+            self.preview_label.setText(f"Result: {p}")
         else:
-            example = self.output_folder / f"file{suffix}.mp4"
-        return str(example) + " (example)"
-    
-    def _update_preview(self):
-        path_str = self._compute_preview_path()
-        if path_str is not None:
-            self.preview_label.configure(text=f"Result: {path_str}")
-        else:
-            self.preview_label.configure(text="Result: (select Output folder to see preview)")
-    
-    def _browse_scan_folder(self):
-        """Browse for scan folder"""
-        folder = filedialog.askdirectory(title="Select folder to scan for video files")
-        if folder:
-            self.scan_folder = Path(folder)
-            self.scan_folder_label.configure(text=str(self.scan_folder))
+            self.preview_label.setText("Result: (select Output folder to see preview)")
+
+    def _update_output_path_visibility(self) -> None:
+        custom = self._radio_custom.isChecked()
+        self.strip_entry.setEnabled(custom)
+
+    def _browse_scan_folder(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Select folder to scan for video files")
+        if d:
+            self.scan_folder = Path(d)
+            self.scan_folder_label.setText(str(self.scan_folder))
             config.set_last_scan_folder(str(self.scan_folder))
             self._update_preview()
-    
-    def _on_output_destination_changed(self, *args):
-        """Update visibility and persist when destination radio changes"""
-        val = self.output_destination_var.get()
-        self._update_output_path_visibility()
-        if val in ("input_folder", "custom_folder"):
-            config.set_output_destination(val)
 
-    def _on_output_destination_choice(self):
-        """Called when user selects a destination radio button"""
-        if self.output_destination_var.get() == "custom_folder":
-            config.set_output_destination("custom_folder")
-
-    def _update_output_path_visibility(self):
-        """Enable or disable Clear button and strip control based on destination"""
-        is_custom = self.output_destination_var.get() == "custom_folder"
-        self.clear_output_btn.configure(state="normal" if is_custom else "disabled")
-        self.strip_entry.configure(state="normal" if is_custom else "disabled")
-        self._update_preview()
-
-    def _browse_output_folder(self):
-        """Browse for output folder; switches to Output folder mode if needed"""
-        if self.output_destination_var.get() != "custom_folder":
-            self.output_destination_var.set("custom_folder")
-        folder = filedialog.askdirectory(title="Select output folder")
-        if folder:
-            self.output_folder = Path(folder)
-            self.output_folder_label.configure(text=str(self.output_folder))
+    def _browse_output_folder(self) -> None:
+        self._radio_custom.setChecked(True)
+        d = QFileDialog.getExistingDirectory(self, "Select output folder")
+        if d:
+            self.output_folder = Path(d)
+            self.output_folder_label.setText(str(self.output_folder))
             config.set_output_destination("custom_folder")
             config.set_default_output_folder(str(self.output_folder))
             self._update_preview()
 
-    def _clear_output_folder(self):
-        """Clear the chosen output folder; encodes fall back to input location until Browse again"""
+    def _clear_output_folder(self) -> None:
         self.output_folder = None
-        self.output_folder_label.configure(text="Not selected")
+        self.output_folder_label.setText("Not selected")
         config.set_default_output_folder("")
         self._update_preview()
-    
-    def _scan_folder(self):
-        """Scan folder for video files"""
-        logger.debug(f"_scan_folder called, self.scan_folder={self.scan_folder}")
-        
-        if not self.scan_folder:
-            logger.debug("No scan folder selected, showing warning toast")
-            self._show_toast("Please select a scan folder first", "warning")
-            return
-        
-        logger.debug(f"Scanning folder: {self.scan_folder}")
-        
-        # Clear existing files
-        self.file_list.clear()
-        
-        # Scan for files
-        files = self.scanner.scan_directory(self.scan_folder, recursive=True)
-        logger.debug(f"Found {len(files)} files")
-        
-        # Add files to list
-        for file_path in files:
-            self.file_list.add_file(file_path, relative_to=self.scan_folder, root=self.scan_folder)
-        
-        logger.debug(f"Showing completion toast with {len(files)} files")
-        if self.on_files_changed:
-            self.on_files_changed()
-        self._update_preview()
-        
-        # Show completion toast instead of messagebox
-        self._show_toast(f"Found {len(files)} video file(s)", "success")
-    
-    def _add_files(self):
-        """Add individual files"""
-        files = filedialog.askopenfilenames(
-            title="Select video files",
-            filetypes=[
-                ("Video files", "*.mkv *.mp4 *.mov *.avi *.m4v *.flv *.wmv *.webm"),
-                ("All files", "*.*")
-            ]
-        )
-        
-        for file_path in files:
-            path = Path(file_path)
-            root = path.parent.parent if path.parent != path else path.parent
-            self.file_list.add_file(path, root=root)
-        
-        if self.on_files_changed:
-            self.on_files_changed()
-        self._update_preview()
-    
-    def _remove_selected(self):
-        """Remove selected files"""
-        selected_count = self.file_list.remove_selected_files()
-        if selected_count > 0:
+
+    def _ingest_local_paths(self, paths: List[Path]) -> int:
+        """Add files or scan dropped/selected paths. Returns count of list entries added."""
+        count = 0
+        for raw in paths:
+            try:
+                path = raw.resolve()
+            except OSError:
+                path = raw
+            if not path.exists():
+                continue
+            if path.is_file():
+                if self.scanner.is_video_file(path):
+                    root = path.parent.parent if path.parent != path else path.parent
+                    self.file_list.add_file(path, root=root)
+                    count += 1
+            elif path.is_dir():
+                found = self.scanner.scan_directory(path, recursive=True)
+                for fp in found:
+                    self.file_list.add_file(fp, relative_to=path, root=path)
+                    count += 1
+        return count
+
+    def _on_paths_dropped(self, paths: List[Path]) -> None:
+        n = self._ingest_local_paths(paths)
+        if n > 0:
             if self.on_files_changed:
                 self.on_files_changed()
             self._update_preview()
-            self._show_toast(f"Removed {selected_count} file(s) from the list.", "info")
+            self._show_toast(f"Added {n} item(s) from drop", "success")
+        elif paths:
+            self._show_toast("No video files found in the drop.", "warning")
+
+    def _scan_folder(self) -> None:
+        if not self.scan_folder:
+            self._show_toast("Please select a scan folder first", "warning")
+            return
+        self.file_list.clear()
+        files = self.scanner.scan_directory(self.scan_folder, recursive=True)
+        for fp in files:
+            self.file_list.add_file(fp, relative_to=self.scan_folder, root=self.scan_folder)
+        if self.on_files_changed:
+            self.on_files_changed()
+        self._update_preview()
+        self._show_toast(f"Found {len(files)} video file(s)", "success")
+
+    def _add_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select video files",
+            "",
+            "Video files (*.mkv *.mp4 *.mov *.avi *.m4v *.flv *.wmv *.webm);;All files (*.*)",
+        )
+        if not paths:
+            return
+        n = self._ingest_local_paths([Path(p) for p in paths])
+        if n > 0:
+            if self.on_files_changed:
+                self.on_files_changed()
+            self._update_preview()
+        else:
+            self._show_toast("No supported video files in selection.", "warning")
+
+    def _remove_selected(self) -> None:
+        n = self.file_list.remove_selected_files()
+        if n > 0:
+            if self.on_files_changed:
+                self.on_files_changed()
+            self._update_preview()
+            self._show_toast(f"Removed {n} file(s) from the list.", "info")
         else:
             self._show_toast("Please select one or more files to remove.", "warning")
-    
-    def _clear_all(self):
-        """Clear all files"""
+
+    def _clear_all(self) -> None:
         self.file_list.clear()
         if self.on_files_changed:
             self.on_files_changed()
         self._update_preview()
-    
-    def _select_all(self):
-        """Select all files in the list"""
+
+    def _select_all(self) -> None:
         self.file_list.select_all()
-    
-    def _deselect_all(self):
-        """Deselect all files in the list"""
+
+    def _deselect_all(self) -> None:
         self.file_list.deselect_all()
 
-    def _mark_for_reencode(self):
+    def _mark_for_reencode(self) -> None:
         indices = self.file_list.get_action_target_indices()
         if not indices:
-            messagebox.showwarning(
+            QMessageBox.warning(
+                self,
                 "No selection",
                 "Select one or more files (click rows or use the checkbox column).",
             )
             return
         count = self.file_list.set_reencode_for_indices(indices, True)
-        messagebox.showinfo(
+        QMessageBox.information(
+            self,
             "Re-encode",
             f"Marked {count} file(s). They will be encoded even if the output file already exists.",
         )
 
-    def _clear_reencode_marks(self):
+    def _clear_reencode_marks(self) -> None:
         indices = self.file_list.get_action_target_indices()
         if not indices:
             indices = list(range(self.file_list.get_file_count()))
@@ -454,7 +431,7 @@ class FilesTab(ctk.CTkFrame):
         count = self.file_list.set_reencode_for_indices(indices, False)
         self._show_toast(f"Cleared re-encode mark on {count} file(s).", "info")
 
-    def _load_tracks(self):
+    def _load_tracks(self) -> None:
         if self._load_tracks_busy:
             return
         files = self.file_list.get_files()
@@ -462,118 +439,70 @@ class FilesTab(ctk.CTkFrame):
             self._show_toast("Add files to the list first.", "warning")
             return
         if not self.track_analyzer.mkvinfo_path and not self.track_analyzer.ffprobe_path:
-            messagebox.showerror(
+            QMessageBox.critical(
+                self,
                 "Track analysis unavailable",
                 "Install MKVToolNix (mkvinfo) for MKV files, or FFmpeg (ffprobe) for other formats.",
             )
             return
-
         indices = self.file_list.get_action_target_indices()
-        scope = "selected"
         if not indices:
             indices = list(range(len(files)))
-            scope = "all"
-
         self._load_tracks_busy = True
-        self.load_tracks_btn.configure(state="disabled")
+        self.load_tracks_btn.setEnabled(False)
+
+        self._load_thread = QThread()
+        self._load_worker = _LoadTracksWorker(indices, files, self.track_analyzer)
+        self._load_worker.moveToThread(self._load_thread)
+        self._load_thread.started.connect(self._load_worker.run)
+        self._load_worker.finished.connect(self._on_load_tracks_finished)
+        self._load_worker.finished.connect(self._load_thread.quit)
+        self._load_worker.finished.connect(self._load_worker.deleteLater)
+        self._load_thread.finished.connect(self._load_thread.deleteLater)
+        self._load_worker.progress.connect(self._on_load_tracks_progress)
+
+        self._load_thread.start()
+
+    def _on_load_tracks_progress(self, done: int, total: int, scope: str) -> None:
         if self.on_status:
-            self.on_status(f"Loading tracks ({scope})… 0/{len(indices)}")
+            self.on_status(f"Loading tracks ({scope})… {done}/{total}")
 
-        def worker():
-            failed: List[str] = []
-            results: List[dict] = []
-            for pos, idx in enumerate(indices):
-                source_file = Path(files[idx]["path"])
-                tracks = self.track_analyzer.analyze_tracks(source_file)
-                done = pos + 1
-                total = len(indices)
-
-                def update_status(p=done, t=total):
-                    if self.on_status:
-                        self.on_status(f"Loading tracks ({scope})… {p}/{t}")
-
-                self.after(0, update_status)
-
-                if tracks.get("error"):
-                    failed.append(source_file.name)
-                    continue
-
-                effective_audio, subtitle_track = compute_effective_tracks(
-                    tracks, self.track_analyzer
-                )
-
-                if effective_audio is not None:
-                    results.append(
-                        {
-                            "idx": idx,
-                            "audio": effective_audio,
-                            "subtitle": subtitle_track,
-                            "no_audio_name": None,
-                        }
-                    )
-                else:
-                    results.append(
-                        {
-                            "idx": idx,
-                            "audio": None,
-                            "subtitle": None,
-                            "no_audio_name": source_file.name,
-                        }
-                    )
-
-            def apply_all():
-                # Guard against window being destroyed during worker thread delay
-                try:
-                    if not self.winfo_exists():
-                        return
-                except Exception:
-                    return
-                
-                no_audio_names: List[str] = []
-                for r in results:
-                    if r["no_audio_name"]:
-                        no_audio_names.append(r["no_audio_name"])
-                    self.file_list.update_file(
-                        r["idx"],
-                        audio_track=r["audio"],
-                        subtitle_track=r["subtitle"],
-                        tracks_from_user=False,
-                    )
-                self._load_tracks_busy = False
-                self.load_tracks_btn.configure(state="normal")
-                if self.on_status:
-                    self._update_status_after_load()
-                parts = []
-                if failed:
-                    parts.append(f"Analysis failed: {len(failed)} file(s)")
-                if no_audio_names:
-                    parts.append(
-                        f"No English audio (or disabled Japanese mode): {len(no_audio_names)} file(s)"
-                    )
-                if not parts:
-                    messagebox.showinfo(
-                        "Load tracks",
-                        f"Updated track info for {len(indices)} file(s).",
-                    )
-                else:
-                    messagebox.showinfo(
-                        "Load tracks",
-                        f"Processed {len(indices)} file(s).\n" + "\n".join(parts),
-                    )
-
-            self.after(0, apply_all)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _update_status_after_load(self):
+    def _on_load_tracks_finished(self, results: list, failed: list, scope: str) -> None:
+        no_audio_names: List[str] = []
+        for r in results:
+            if r["no_audio_name"]:
+                no_audio_names.append(r["no_audio_name"])
+            self.file_list.update_file(
+                r["idx"],
+                audio_track=r["audio"],
+                subtitle_track=r["subtitle"],
+                tracks_from_user=False,
+            )
+        self._load_tracks_busy = False
+        self.load_tracks_btn.setEnabled(True)
         if self.on_status:
-            count = self.file_list.get_file_count()
-            self.on_status(f"Ready - {count} file(s) in queue")
+            self.on_status(f"Ready - {self.file_list.get_file_count()} file(s) in queue")
+        parts = []
+        if failed:
+            parts.append(f"Analysis failed: {len(failed)} file(s)")
+        if no_audio_names:
+            parts.append(
+                f"No English audio (or disabled Japanese mode): {len(no_audio_names)} file(s)"
+            )
+        if not parts:
+            QMessageBox.information(self, "Load tracks", f"Updated track info for {len(results)} file(s).")
+        else:
+            QMessageBox.information(
+                self,
+                "Load tracks",
+                f"Processed {len(results)} file(s).\n" + "\n".join(parts),
+            )
 
-    def _open_set_tracks_dialog(self):
+    def _open_set_tracks_dialog(self) -> None:
         indices = self.file_list.get_action_target_indices()
         if not indices:
-            messagebox.showwarning(
+            QMessageBox.warning(
+                self,
                 "No selection",
                 "Select one or more files (click rows or use the checkbox column).",
             )
@@ -582,32 +511,23 @@ class FilesTab(ctk.CTkFrame):
         first_idx = indices[0]
         source_file = Path(files[first_idx]["path"])
         if not source_file.exists():
-            messagebox.showerror("File not found", str(source_file))
+            QMessageBox.critical(self, "File not found", str(source_file))
             return
-
         tracks = self.track_analyzer.analyze_tracks(source_file)
         if tracks.get("error"):
-            messagebox.showerror(
-                "Analysis failed",
-                f"Could not read tracks: {tracks['error']}",
-            )
+            QMessageBox.critical(self, "Analysis failed", f"Could not read tracks: {tracks['error']}")
             return
         all_tracks = tracks.get("all_tracks") or []
         if not all_tracks:
-            messagebox.showinfo(
+            QMessageBox.information(
+                self,
                 "No track list",
-                "Track layout could not be listed for this file. "
-                "Use MKV files with mkvinfo, or load tracks after analysis support is added for this format.",
+                "Track layout could not be listed for this file.",
             )
             return
-
-        audio_tracks = sorted(
-            [t for t in all_tracks if t.get("type") == "audio"],
-            key=lambda t: t["id"],
-        )
+        audio_tracks = sorted([t for t in all_tracks if t.get("type") == "audio"], key=lambda t: t["id"])
         sub_tracks = sorted(
-            [t for t in all_tracks if t.get("type") == "subtitles"],
-            key=lambda t: t["id"],
+            [t for t in all_tracks if t.get("type") == "subtitles"], key=lambda t: t["id"]
         )
 
         def audio_label(t):
@@ -621,27 +541,25 @@ class FilesTab(ctk.CTkFrame):
             lang = t.get("language") or "?"
             name = (t.get("name") or "").strip()
             extra = f" — {name}" if name else ""
-            return f"Subtitle stream {t['id']} (HB {t['id'] + 1}) ({lang}){extra}", t["id"]
+            return (
+                f"Subtitle stream {t['id']} (HB {t['id'] + 1}) ({lang}){extra}",
+                t["id"],
+            )
 
         audio_options = [("None (no audio track)", None)] + [audio_label(t) for t in audio_tracks]
-        subtitle_options = [("None (no burned subtitles)", None)] + [
-            sub_label(t) for t in sub_tracks
-        ]
-
-        picked = show_set_tracks_dialog(
-            self,
-            audio_options,
-            subtitle_options,
-            len(indices),
-        )
+        subtitle_options = [("None (no burned subtitles)", None)] + [sub_label(t) for t in sub_tracks]
+        picked = show_set_tracks_dialog(self, audio_options, subtitle_options, len(indices))
         if picked is None:
             return
         audio_track, subtitle_track = picked
         if audio_track is None:
-            if not messagebox.askyesno(
+            r = QMessageBox.question(
+                self,
                 "No audio",
                 "Audio is set to None. Encoding may fail. Continue?",
-            ):
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if r != QMessageBox.StandardButton.Yes:
                 return
         for idx in indices:
             self.file_list.update_file(
@@ -654,85 +572,45 @@ class FilesTab(ctk.CTkFrame):
             self.on_files_changed()
 
     def get_files(self):
-        """Get list of files"""
         return self.file_list.get_files()
-    
+
     def get_scan_folder(self) -> Optional[Path]:
-        """Get scan folder"""
         return self.scan_folder
-    
+
     def get_output_folder(self) -> Optional[Path]:
-        """Get output folder"""
         return self.output_folder
-    
+
     def get_output_path(self, source_file: Path) -> Path:
-        """Get output path for a source file, preserving folder structure per file root."""
-        use_custom = (
-            self.output_destination_var.get() == "custom_folder" and self.output_folder
-        )
+        use_custom = self._radio_custom.isChecked() and self.output_folder
         if not use_custom:
             return source_file.parent
-
         root = None
         for fd in self.file_list.get_files():
             if fd.get("path") == source_file:
                 root = fd.get("root")
                 break
-
         if root is not None:
             try:
-                relative_path = source_file.relative_to(root)
-                relative_dir = relative_path.parent
-                parts = relative_dir.parts
+                rel = source_file.relative_to(root)
+                parts = rel.parent.parts
                 strip_n = config.get_strip_leading_path_segments()
                 remaining = parts[strip_n:]
-                if remaining:
-                    output_dir = self.output_folder / Path(*remaining)
-                else:
-                    output_dir = self.output_folder
-                output_dir.mkdir(parents=True, exist_ok=True)
-                return output_dir
+                od = self.output_folder / Path(*remaining) if remaining else self.output_folder
+                od.mkdir(parents=True, exist_ok=True)
+                return od
             except ValueError:
                 pass
-
         if self.scan_folder:
             try:
-                relative_path = source_file.relative_to(self.scan_folder)
-                relative_dir = relative_path.parent
-                parts = relative_dir.parts
+                rel = source_file.relative_to(self.scan_folder)
+                parts = rel.parent.parts
                 strip_n = config.get_strip_leading_path_segments()
                 remaining = parts[strip_n:]
-                if remaining:
-                    output_dir = self.output_folder / Path(*remaining)
-                else:
-                    output_dir = self.output_folder
-                output_dir.mkdir(parents=True, exist_ok=True)
-                return output_dir
+                od = self.output_folder / Path(*remaining) if remaining else self.output_folder
+                od.mkdir(parents=True, exist_ok=True)
+                return od
             except ValueError:
                 pass
-
-        output_dir = self.output_folder / source_file.parent.name
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return output_dir
-    
-    def _show_toast(self, message: str, message_type: str = "info") -> None:
-        """Show in-app toast notification"""
-        logger.debug(f"_show_toast called: message='{message}', type='{message_type}'")
-        logger.debug(f"self.master type: {type(self.master)}")
-        
-        # Traverse up the widget hierarchy to find MainWindow
-        widget = self.master
-        max_depth = 10
-        depth = 0
-        
-        while widget and depth < max_depth:
-            logger.debug(f"Depth {depth}: widget type = {type(widget)}, has toast_manager = {hasattr(widget, 'toast_manager')}")
-            if hasattr(widget, "toast_manager"):
-                logger.debug(f"Found toast_manager at depth {depth}!")
-                widget.toast_manager.show(message, message_type=message_type, duration=3)
-                return
-            widget = getattr(widget, "master", None)
-            depth += 1
-        
-        logger.warning(f"Could not find toast_manager after traversing {depth} levels")
-
+        od = self.output_folder / source_file.parent.name
+        od.mkdir(parents=True, exist_ok=True)
+        return od
