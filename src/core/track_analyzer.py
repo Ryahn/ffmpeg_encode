@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 _REGEX_CACHE_MAX_KEYS = 64
 
+# Safety caps for mkvinfo output parsing.
+# A legitimate video file rarely has more than a handful of tracks; these limits
+# prevent a crafted MKV (or a misbehaving mkvinfo build) from allocating
+# unbounded memory inside the parser.
+_MKVINFO_MAX_LINES = 10_000   # lines of text to consider
+_MKVINFO_MAX_TRACKS = 64      # track dicts to accumulate
+
 
 class TrackAnalyzer:
     """Analyzes video files to detect audio and subtitle tracks"""
@@ -29,7 +36,18 @@ class TrackAnalyzer:
         if cached is None:
             if len(self._regex_cache) >= _REGEX_CACHE_MAX_KEYS:
                 self._regex_cache.clear()
-            cached = [re.compile(p, re.IGNORECASE) for p in pattern_strings]
+            compiled: List[Pattern[str]] = []
+            for p in pattern_strings:
+                try:
+                    compiled.append(re.compile(p, re.IGNORECASE))
+                except re.error as exc:
+                    # A bad pattern in config must not crash track detection.
+                    # Log and skip; config.py setters validate on write, but
+                    # a hand-edited JSON file could still contain bad patterns.
+                    logger.warning(
+                        "Invalid regex pattern %r in config (skipped): %s", p, exc
+                    )
+            cached = compiled
             self._regex_cache[key] = cached
         return cached
     
@@ -100,23 +118,48 @@ class TrackAnalyzer:
         """Parse mkvinfo output to find tracks"""
         audio_track = None
         subtitle_track = None
-        
+
         # Collect all tracks first
         tracks = []
         lines = output.splitlines()
+
+        # Cap input size before iterating — protects against a crafted MKV that
+        # generates enormous mkvinfo output (e.g. thousands of embedded fonts or
+        # chapter entries) filling memory before the 30 s timeout fires.
+        if len(lines) > _MKVINFO_MAX_LINES:
+            logger.warning(
+                "mkvinfo output truncated from %d to %d lines for safety.",
+                len(lines),
+                _MKVINFO_MAX_LINES,
+            )
+            lines = lines[:_MKVINFO_MAX_LINES]
+
         current_track = None
-        
+
         for line in lines:
             # Strip leading whitespace and pipe characters
             line_clean = line.lstrip('| \t')
-            
+            # mkvinfo nests Tags after Tracks; Tag "Simple" lines use deeper indent than Track entry
+            # fields. lstrip('| \t') hides that, so Tag "+ Name: DURATION" was overwriting real track names.
+            is_track_entry_field_line = bool(re.match(r"^\|\s{2}\+", line))
+
             # Detect track start
             match = re.search(r'\+ Track number: (\d+) \(track ID for mkvmerge & mkvextract: (\d+)\)', line_clean)
             if match:
                 # Save previous track if exists
                 if current_track is not None:
                     tracks.append(current_track)
-                
+
+                # Guard against files with an unreasonable number of tracks.
+                if len(tracks) >= _MKVINFO_MAX_TRACKS:
+                    logger.warning(
+                        "mkvinfo track count reached safety limit (%d); "
+                        "ignoring remaining tracks.",
+                        _MKVINFO_MAX_TRACKS,
+                    )
+                    current_track = None
+                    break
+
                 # Start new track
                 track_id = int(match.group(2))  # mkvmerge track ID (0-indexed)
                 current_track = {
@@ -132,32 +175,32 @@ class TrackAnalyzer:
             
             # Detect track type
             match = re.search(r'\+ Track type: (audio|subtitles|video)', line_clean)
-            if match:
+            if match and is_track_entry_field_line:
                 current_track["type"] = match.group(1)
                 continue
             
             # Detect language (prefer IETF BCP 47 format)
             # IETF BCP 47 can have hyphens, e.g., "eng-eng"
             match = re.search(r'\+ Language \(IETF BCP 47\): ([^\s]+)', line_clean)
-            if match:
+            if match and is_track_entry_field_line:
                 current_track["language"] = match.group(1)
                 continue
             
             match = re.search(r'\+ Language: (\w+)', line_clean)
-            if match and current_track["language"] is None:
+            if match and current_track["language"] is None and is_track_entry_field_line:
                 current_track["language"] = match.group(1)
                 continue
             
             # Detect track name
             match = re.search(r'\+ Name: (.+)', line_clean)
-            if match:
+            if match and is_track_entry_field_line:
                 current_track["name"] = match.group(1).strip()
                 continue
         
         # Save last track
         if current_track is not None:
             tracks.append(current_track)
-        
+
         # Process tracks to find English audio and Signs & Songs subtitle
         # Use mkvmerge track ID directly (matches FFmpeg stream index in MKV files)
         # Audio: 1-based for HandBrake CLI. Also record first audio track for "Japanese + English subs" mode.

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import shutil
 import threading
@@ -68,7 +69,11 @@ class Config:
             "audio_exclude_patterns": ["Japanese", "JPN", "日本語"],
             "subtitle_language_tags": ["en", "eng"],
             "subtitle_name_patterns": ["Signs.*Songs", "Signs.*Song", "Signs$", "English Signs", "^Signs\\s*$"],
-            "subtitle_exclude_patterns": ["Japanese", "JPN", "日本語"]
+            "subtitle_exclude_patterns": ["Japanese", "JPN", "日本語"],
+            "audio_normalize_enabled": False,
+            "audio_normalize_loudnorm_I": -16.0,
+            "audio_normalize_loudnorm_TP": -1.5,
+            "audio_normalize_loudnorm_LRA": 11.0,
         }
     
     def _write_config_file_locked(self) -> None:
@@ -235,6 +240,85 @@ class Config:
         """Set allow Japanese audio with English subs"""
         self.set("allow_japanese_audio_with_english_subs", value)
 
+    def get_audio_normalize_enabled(self) -> bool:
+        """When True, FFmpeg commands from the preset translator include single-pass loudnorm on audio."""
+        return bool(self.get("audio_normalize_enabled", False))
+
+    def set_audio_normalize_enabled(self, value: bool):
+        """Enable or disable integrated loudnorm on FFmpeg-tab preset commands."""
+        self.set("audio_normalize_enabled", bool(value))
+
+    def get_audio_normalize_loudnorm_I(self) -> float:
+        """Target integrated loudness (LUFS) for loudnorm (typical streaming ~ -16)."""
+        return self._clamp_float(
+            self.get("audio_normalize_loudnorm_I", -16.0),
+            -70.0,
+            -5.0,
+            -16.0,
+        )
+
+    def set_audio_normalize_loudnorm_I(self, value: float):
+        self.set(
+            "audio_normalize_loudnorm_I",
+            self._clamp_float(value, -70.0, -5.0, -16.0),
+        )
+
+    def get_audio_normalize_loudnorm_TP(self) -> float:
+        """Maximum true peak (dBTP) for loudnorm."""
+        return self._clamp_float(
+            self.get("audio_normalize_loudnorm_TP", -1.5),
+            -9.0,
+            0.0,
+            -1.5,
+        )
+
+    def set_audio_normalize_loudnorm_TP(self, value: float):
+        self.set(
+            "audio_normalize_loudnorm_TP",
+            self._clamp_float(value, -9.0, 0.0, -1.5),
+        )
+
+    def get_audio_normalize_loudnorm_LRA(self) -> float:
+        """Target loudness range for loudnorm."""
+        return self._clamp_float(
+            self.get("audio_normalize_loudnorm_LRA", 11.0),
+            1.0,
+            20.0,
+            11.0,
+        )
+
+    def set_audio_normalize_loudnorm_LRA(self, value: float):
+        self.set(
+            "audio_normalize_loudnorm_LRA",
+            self._clamp_float(value, 1.0, 20.0, 11.0),
+        )
+
+    @staticmethod
+    def _clamp_float(raw: Any, lo: float, hi: float, fallback: float) -> float:
+        try:
+            x = float(raw)
+        except (TypeError, ValueError):
+            return fallback
+        return max(lo, min(hi, x))
+
+    @staticmethod
+    def _sanitize_regex_patterns(patterns: list) -> list:
+        """Validate each pattern string compiles as a regex.
+
+        Invalid patterns are logged and silently dropped so that one bad entry
+        cannot crash track analysis or silently match nothing at runtime.
+        """
+        valid: list = []
+        for p in patterns:
+            if not isinstance(p, str):
+                continue
+            try:
+                re.compile(p)
+                valid.append(p)
+            except re.error as exc:
+                print(f"Config: invalid regex pattern {p!r} dropped: {exc}")
+        return valid
+
     def get_audio_language_tags(self) -> list:
         """Get audio language tags to match"""
         return self.get("audio_language_tags", ["en", "eng"])
@@ -249,15 +333,15 @@ class Config:
     
     def set_audio_name_patterns(self, patterns: list):
         """Set audio name patterns to match"""
-        self.set("audio_name_patterns", patterns)
-    
+        self.set("audio_name_patterns", self._sanitize_regex_patterns(patterns))
+
     def get_audio_exclude_patterns(self) -> list:
         """Get audio exclude patterns"""
         return self.get("audio_exclude_patterns", ["Japanese", "JPN", "日本語"])
-    
+
     def set_audio_exclude_patterns(self, patterns: list):
         """Set audio exclude patterns"""
-        self.set("audio_exclude_patterns", patterns)
+        self.set("audio_exclude_patterns", self._sanitize_regex_patterns(patterns))
     
     def get_subtitle_language_tags(self) -> list:
         """Get subtitle language tags to match"""
@@ -273,15 +357,15 @@ class Config:
     
     def set_subtitle_name_patterns(self, patterns: list):
         """Set subtitle name patterns to match"""
-        self.set("subtitle_name_patterns", patterns)
-    
+        self.set("subtitle_name_patterns", self._sanitize_regex_patterns(patterns))
+
     def get_subtitle_exclude_patterns(self) -> list:
         """Get subtitle exclude patterns"""
         return self.get("subtitle_exclude_patterns", ["Japanese", "JPN", "日本語"])
-    
+
     def set_subtitle_exclude_patterns(self, patterns: list):
         """Set subtitle exclude patterns"""
-        self.set("subtitle_exclude_patterns", patterns)
+        self.set("subtitle_exclude_patterns", self._sanitize_regex_patterns(patterns))
     
     def get_saved_ffmpeg_commands(self) -> dict:
         """Get saved FFmpeg commands"""
@@ -324,11 +408,22 @@ class Config:
         presets_dir.mkdir(parents=True, exist_ok=True)
         
         presets = self.get_saved_presets()
-        
-        # If preset with this name already exists, use the same path
+
+        # If preset with this name already exists, re-validate the stored path
+        # before reusing it.  A hand-edited config.json could point the stored
+        # path outside the presets directory; _safe_preset_path() catches that.
         if name in presets:
-            dest_path = Path(presets[name])
+            validated = self._safe_preset_path(presets[name])
+            if validated is None:
+                # Stored path is invalid / escaped the presets dir — treat as new.
+                del presets[name]
+                dest_path = None
+            else:
+                dest_path = validated
         else:
+            dest_path = None
+
+        if dest_path is None:
             # Create a safe filename from the preset name
             safe_name = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in name)
             safe_name = safe_name.strip()
@@ -353,29 +448,44 @@ class Config:
         
         return dest_path
     
+    def _safe_preset_path(self, path_str: str) -> Optional[Path]:
+        """Resolve path_str and confirm it sits inside the presets directory.
+
+        Returns the resolved Path on success, None if the path escapes the
+        presets directory (guards against path-traversal via a tampered config).
+        """
+        presets_dir = (self.config_dir / "presets").resolve()
+        try:
+            path = Path(path_str).resolve()
+        except (TypeError, ValueError):
+            return None
+        if not path.is_relative_to(presets_dir):
+            return None
+        return path
+
     def get_preset_path(self, name: str) -> Optional[Path]:
         """Get the saved path for a preset by name"""
         presets = self.get_saved_presets()
         path_str = presets.get(name)
         if path_str:
-            path = Path(path_str)
-            if path.exists():
+            path = self._safe_preset_path(path_str)
+            if path and path.exists():
                 return path
         return None
-    
+
     def delete_preset(self, name: str):
         """Delete a saved preset"""
         presets = self.get_saved_presets()
         if name in presets:
             path_str = presets[name]
-            path = Path(path_str)
-            # Delete the file if it exists
-            if path.exists():
+            path = self._safe_preset_path(path_str)
+            # Delete the file if it exists and is within the presets directory
+            if path and path.exists():
                 try:
                     path.unlink()
                 except OSError:
                     pass
-            # Remove from config
+            # Remove from config regardless of whether the file existed
             del presets[name]
             self.set_saved_presets(presets)
     

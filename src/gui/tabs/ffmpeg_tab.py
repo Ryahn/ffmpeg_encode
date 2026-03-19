@@ -10,6 +10,7 @@ import shlex
 import re
 import time
 
+from ..theme import APP_LOG_WARN, APP_TEXT_CMD, APP_TEXT_DIM, APP_TEXT_PREVIEW, monospace_font
 from ..widgets.progress_bar import ProgressDisplay
 from ..widgets.log_viewer import LogViewer
 from ..widgets.toast import ToastManager
@@ -17,7 +18,8 @@ from core.preset_parser import PresetParser
 from core.encoder import Encoder, EncodingProgress, extract_subtitle_stream
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import compute_effective_tracks
-from core.ffmpeg_translator import FFmpegTranslator
+from core.ffmpeg_translator import FFmpegTranslator, _escape_ffmpeg_filter_path
+from core.audio_normalize import build_integrated_loudnorm_filter
 from core.notifications import BatchNotification
 from core.batch_stats import BatchStats
 from utils.config import config
@@ -41,7 +43,8 @@ class FFmpegTab(ctk.CTkFrame):
         self.get_files_callback: Optional[Callable] = None
         self.update_file_callback: Optional[Callable] = None
         self.get_output_path_callback: Optional[Callable] = None
-        
+        self._progress_ui_throttle_last: Optional[float] = None
+
         # Create scrollable frame for main content
         scrollable = ctk.CTkScrollableFrame(self)
         scrollable.pack(fill="both", expand=True, padx=10, pady=10)
@@ -98,7 +101,7 @@ class FFmpegTab(ctk.CTkFrame):
             header_left,
             text="(Note: 'input.mkv' and 'output.mp4' are example placeholders - actual file paths will be used during encoding)",
             font=ctk.CTkFont(size=9),
-            text_color="gray"
+            text_color=APP_TEXT_DIM,
         )
         note_label.pack(side="left", padx=10)
         
@@ -172,7 +175,7 @@ class FFmpegTab(ctk.CTkFrame):
             text="ℹ️ Note: 'input.mkv' and 'output.mp4' shown below are EXAMPLE PLACEHOLDERS only. " +
                  "During encoding, these will be automatically replaced with the actual input and output file paths.",
             font=ctk.CTkFont(size=10),
-            text_color="yellow",
+            text_color=APP_LOG_WARN,
             anchor="w",
             justify="left",
             wraplength=1000
@@ -180,7 +183,12 @@ class FFmpegTab(ctk.CTkFrame):
         info_label.pack(fill="x", padx=5, pady=5)
         
         # Command textbox (now editable)
-        self.cmd_text = ctk.CTkTextbox(cmd_frame, height=100, font=ctk.CTkFont(family="Courier", size=10))
+        self.cmd_text = ctk.CTkTextbox(
+            cmd_frame,
+            height=100,
+            font=monospace_font(10, master=self),
+            text_color=APP_TEXT_CMD,
+        )
         self.cmd_text.pack(fill="x", padx=10, pady=5)
         # Keep it enabled for editing
         
@@ -213,8 +221,9 @@ class FFmpegTab(ctk.CTkFrame):
         self.preview_text = ctk.CTkTextbox(
             cmd_frame,
             height=100,
-            font=ctk.CTkFont(family="Courier", size=10),
-            state="disabled"
+            font=monospace_font(10, master=self),
+            text_color=APP_TEXT_PREVIEW,
+            state="disabled",
         )
         self.preview_text.pack(fill="x", padx=10, pady=5)
         
@@ -251,7 +260,7 @@ class FFmpegTab(ctk.CTkFrame):
             placeholder_frame,
             text="(Click to insert)",
             font=ctk.CTkFont(size=9),
-            text_color="gray"
+            text_color=APP_TEXT_DIM,
         )
         help_label.pack(side="left", padx=5)
         
@@ -359,7 +368,17 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Initial preview update
         self._update_command_preview_display()
-    
+
+    def _audio_filter_from_settings(self) -> Optional[str]:
+        """Single-pass loudnorm filter from Settings, or None when disabled."""
+        if not config.get_audio_normalize_enabled():
+            return None
+        return build_integrated_loudnorm_filter(
+            config.get_audio_normalize_loudnorm_I(),
+            config.get_audio_normalize_loudnorm_TP(),
+            config.get_audio_normalize_loudnorm_LRA(),
+        )
+
     def _setup_preview_handlers(self):
         """Set up event handlers to update preview automatically"""
         # Bind to command textbox changes
@@ -519,7 +538,8 @@ class FFmpegTab(ctk.CTkFrame):
             input_file=placeholder_input,
             output_file=placeholder_output,
             audio_track=2,  # Track ID 1 + 1 = 2, which maps to stream 1
-            subtitle_track=subtitle_track_preview
+            subtitle_track=subtitle_track_preview,
+            audio_filter=self._audio_filter_from_settings(),
         )
         
         self.cmd_text.delete("1.0", "end")
@@ -602,7 +622,8 @@ class FFmpegTab(ctk.CTkFrame):
                 input_file=placeholder_input,
                 output_file=placeholder_output,
                 audio_track=audio_track,
-                subtitle_track=subtitle_track
+                subtitle_track=subtitle_track,
+                audio_filter=self._audio_filter_from_settings(),
             )
             
             # Update command textbox
@@ -614,7 +635,7 @@ class FFmpegTab(ctk.CTkFrame):
             
             # Show success message
             track_info = f"Audio track: {audio_track}"
-            if subtitle_track:
+            if subtitle_track is not None:
                 track_info += f", Subtitle track: {subtitle_track}"
             else:
                 track_info += ", No subtitle track detected"
@@ -678,9 +699,9 @@ class FFmpegTab(ctk.CTkFrame):
         
         # Generate example subtitle file path if subtitle track exists
         subtitle_file = None
-        if subtitle_track:
+        if subtitle_track is not None:
             # Create a temporary path example (won't actually exist, just for preview)
-            subtitle_file = Path(tempfile.gettempdir()) / f"{source_file.stem}_subtitle.ass"
+            subtitle_file = Path(tempfile.gettempdir()) / f"{source_file.stem}_subtitle.mkv"
         
         # Replace placeholders using similar logic to _parse_and_substitute_command
         # but format for display (with quotes for paths with spaces)
@@ -733,7 +754,7 @@ class FFmpegTab(ctk.CTkFrame):
         )
         
         # Replace subtitle track placeholder
-        if subtitle_track:
+        if subtitle_track is not None:
             command = re.sub(r'\{SUBTITLE_TRACK\}', str(subtitle_track), command)
             command = re.sub(r'<SUBTITLE_TRACK>', str(subtitle_track), command)
         
@@ -1068,7 +1089,7 @@ class FFmpegTab(ctk.CTkFrame):
             if subtitle_track is not None and not dry_run:
                 subtitle_stream_id = subtitle_track  # 0-based
                 self._on_log("INFO", f"Extracting subtitle stream {subtitle_stream_id} (HandBrake track {subtitle_stream_id + 1})")
-                subtitle_file = extract_subtitle_stream(
+                subtitle_file, subtitle_extract_error = extract_subtitle_stream(
                     ffmpeg_path=ffmpeg_path,
                     input_file=source_file,
                     subtitle_stream_id=subtitle_stream_id
@@ -1080,7 +1101,13 @@ class FFmpegTab(ctk.CTkFrame):
                         self._on_log("WARNING", "Subtitle file is empty, subtitles may not appear")
                         subtitle_file = None  # Don't use empty file
                 else:
-                    self._on_log("WARNING", f"Failed to extract subtitle stream {subtitle_stream_id} or file does not exist")
+                    warn = (
+                        f"Failed to extract subtitle stream {subtitle_stream_id} "
+                        f"(HandBrake track {subtitle_stream_id + 1}) or file does not exist"
+                    )
+                    if subtitle_extract_error:
+                        warn += f": {subtitle_extract_error}"
+                    self._on_log("WARNING", warn)
                     subtitle_file = None
             
             # Get command from textbox (user may have edited it)
@@ -1125,6 +1152,7 @@ class FFmpegTab(ctk.CTkFrame):
             
             # Encode with timing
             self._on_log("INFO", f"Starting encoding to: {output_file.name}")
+            self._progress_ui_throttle_last = None
             file_start_time = time.time()
             try:
                 success = self.encoder.encode_with_ffmpeg(
@@ -1132,6 +1160,7 @@ class FFmpegTab(ctk.CTkFrame):
                     output_file=output_file,
                     ffmpeg_args=ffmpeg_args,
                     subtitle_file=subtitle_file,
+                    subtitle_stream_index=subtitle_track,
                     dry_run=dry_run
                 )
             except Exception as e:
@@ -1247,7 +1276,18 @@ class FFmpegTab(ctk.CTkFrame):
         threading.Thread(target=stop_worker, daemon=True).start()
     
     def _on_progress(self, progress: EncodingProgress):
-        """Handle progress update — marshal to main thread"""
+        """Handle progress update — marshal to main thread (throttled to limit UI load)."""
+        now = time.monotonic()
+        min_interval = 0.2
+        near_complete = progress.percent is not None and progress.percent >= 100.0
+        if (
+            self._progress_ui_throttle_last is not None
+            and (now - self._progress_ui_throttle_last) < min_interval
+            and not near_complete
+        ):
+            return
+        self._progress_ui_throttle_last = now
+
         def update_progress():
             if progress.percent is not None:
                 self.progress_display.set_progress(progress.percent)
@@ -1260,7 +1300,7 @@ class FFmpegTab(ctk.CTkFrame):
                 if progress.speed:
                     status += f" - Speed: {progress.speed:.2f}x"
                 self.progress_display.set_status(status)
-        
+
         self._marshal_ui_update(update_progress)
     
     def _parse_and_substitute_command(
@@ -1329,24 +1369,17 @@ class FFmpegTab(ctk.CTkFrame):
         )
         
         # Replace subtitle track placeholder
-        if subtitle_track:
+        if subtitle_track is not None:
             command = re.sub(r'\{SUBTITLE_TRACK\}', str(subtitle_track), command)
             command = re.sub(r'<SUBTITLE_TRACK>', str(subtitle_track), command)
         
         # Replace subtitle file placeholder
         if subtitle_file:
-            # Escape the path for use in FFmpeg subtitle filter on Windows
-            # FFmpeg subtitle filter requires special escaping for Windows paths:
-            # - Use forward slashes which FFmpeg handles better on Windows
-            # - Colon after drive letter must be escaped: : becomes \:
-            # - Single quotes in path must be escaped: ' becomes '\''
-            sub_path = str(subtitle_file).replace("\\", "/")
-            # Escape colon for filter syntax
-            sub_path = sub_path.replace(":", "\\:")
-            # Escape single quotes (for use inside single-quoted filter value)
-            sub_path = sub_path.replace("'", "'\\''")
-            # Use lambda to avoid issues with backslashes in replacement strings
-            # The placeholder is inside quotes like subtitles='{SUBTITLE_FILE}', so we just replace the placeholder
+            # Use the shared helper for correct two-level FFmpeg lavfi escaping:
+            #   Level 1 (option value): forward-slash normalisation, \' for single-quote, \: for colon
+            #   Level 2 (filtergraph):  \[ \] \; \, for filtergraph meta-characters
+            # Using a lambda avoids re.sub mis-interpreting backslashes in the replacement string.
+            sub_path = _escape_ffmpeg_filter_path(str(subtitle_file))
             command = re.sub(r'\{SUBTITLE_FILE\}', lambda m: sub_path, command)
             command = re.sub(r'<SUBTITLE_FILE>', lambda m: sub_path, command)
         else:
@@ -1369,6 +1402,16 @@ class FFmpegTab(ctk.CTkFrame):
             command = re.sub(r"'input\.mkv'", input_single_quoted, command, flags=re.IGNORECASE)
             command = re.sub(r"'output\.mp4'", output_single_quoted, command, flags=re.IGNORECASE)
         
+        # Warn if any placeholder was never resolved (e.g. a typo in a hand-edited command).
+        # Passing a literal "{INPUT}" to FFmpeg silently fails with a confusing "No such file" error.
+        _remaining = re.findall(r'\{[A-Z_]+\}|<[A-Z_]+>', command)
+        if _remaining:
+            self._on_log(
+                "WARNING",
+                f"Unresolved placeholder(s) in command — encoding may fail: "
+                f"{', '.join(dict.fromkeys(_remaining))}",
+            )
+
         # Parse the command string into a list of arguments
         # Use shlex to properly handle quoted arguments
         # Note: When passing a list to subprocess.Popen(), quotes are NOT needed - each element is a separate argument
@@ -1399,13 +1442,22 @@ class FFmpegTab(ctk.CTkFrame):
             elif i == len(args) - 1 and (arg.endswith('.mp4') or arg.endswith('.mkv') or arg.endswith('.avi')):
                 args[i] = arg.strip('"').strip("'")
         
-        # Replace "ffmpeg" with actual path if present (this should already be done, but just in case)
-        ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
-        for i, arg in enumerate(args):
-            if arg.lower() == "ffmpeg" or (arg.lower().endswith("ffmpeg.exe") and "ffmpeg" in arg.lower()):
-                args[i] = ffmpeg_path
-                break
-        
+        if not args:
+            return []
+
+        ffmpeg_executable = (config.get_ffmpeg_path() or "").strip() or "ffmpeg"
+        first_name = Path(args[0]).name.lower()
+        configured_name = Path(ffmpeg_executable).name.lower()
+        allowed_first = {"ffmpeg", "ffmpeg.exe"}
+        if configured_name:
+            allowed_first.add(configured_name)
+        if first_name not in allowed_first:
+            raise ValueError(
+                "Command must start with ffmpeg or ffmpeg.exe, or the FFmpeg executable "
+                "configured in Settings (first argument was not recognized as FFmpeg)."
+            )
+        args[0] = ffmpeg_executable
+
         return args
     
     def _on_log(self, level: str, message: str):

@@ -5,6 +5,30 @@ from typing import Optional, List
 from .preset_parser import PresetParser
 
 
+def _escape_ffmpeg_filter_path(path: str) -> str:
+    """Escape a file-system path for safe embedding in an FFmpeg -vf filter string.
+
+    FFmpeg's lavfi parser applies two escaping levels:
+      Level 1 (option value)  – backslash, single-quote, colon are special.
+      Level 2 (filtergraph)   – backslash, brackets, semicolon, comma are special.
+
+    Windows backslashes are normalised to forward slashes first so they are
+    never misinterpreted as escape prefixes.  The escaped value is intended to
+    be wrapped in single quotes, e.g. ``subtitles='<escaped>'``.
+    """
+    # Normalise Windows separators — FFmpeg accepts forward slashes on Windows.
+    path = path.replace("\\", "/")
+    # Level 1: characters special inside a single-quoted lavfi option value.
+    path = path.replace("'", "\\'")   # single-quote  → \'
+    path = path.replace(":", "\\:")   # option separator → \:
+    # Level 2: characters special in the filtergraph string itself.
+    path = path.replace("[", "\\[")
+    path = path.replace("]", "\\]")
+    path = path.replace(";", "\\;")
+    path = path.replace(",", "\\,")
+    return path
+
+
 class FFmpegTranslator:
     """Translates HandBrake presets to FFmpeg commands"""
     
@@ -17,7 +41,8 @@ class FFmpegTranslator:
         output_file: Path,
         audio_track: int,
         subtitle_track: Optional[int] = None,
-        subtitle_file: Optional[Path] = None
+        subtitle_file: Optional[Path] = None,
+        audio_filter: Optional[str] = None,
     ) -> List[str]:
         """Build FFmpeg command from preset"""
         if audio_track < 1:
@@ -65,12 +90,9 @@ class FFmpegTranslator:
         
         # Add subtitle filter if needed
         if subtitle_file:
-            # Escape the subtitle file path for use in filter
-            # Use forward slashes and escape colon for Windows paths
-            sub_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
-            sub_path = sub_path.replace("'", "'\\''")
+            sub_path = _escape_ffmpeg_filter_path(str(subtitle_file))
             video_filters.append(f"subtitles='{sub_path}'")
-        elif subtitle_track:
+        elif subtitle_track is not None:
             # Include subtitle filter with placeholder that will be replaced during encoding
             # Use {SUBTITLE_FILE} placeholder which will be replaced with actual extracted subtitle file
             video_filters.append("subtitles='{SUBTITLE_FILE}'")
@@ -90,6 +112,9 @@ class FFmpegTranslator:
         
         # GOP size (for compatibility)
         cmd.extend(["-g", "60"])
+        
+        if audio_filter and audio_filter.strip():
+            cmd.extend(["-af", audio_filter.strip()])
         
         # Audio codec settings
         audio_encoder = self.preset.get_audio_encoder()
@@ -136,10 +161,18 @@ class FFmpegTranslator:
         output_file: Path,
         audio_track: int,
         subtitle_track: Optional[int] = None,
-        subtitle_file: Optional[Path] = None
+        subtitle_file: Optional[Path] = None,
+        audio_filter: Optional[str] = None,
     ) -> str:
         """Get FFmpeg command as a string"""
-        cmd = self.build_command(input_file, output_file, audio_track, subtitle_track, subtitle_file)
+        cmd = self.build_command(
+            input_file,
+            output_file,
+            audio_track,
+            subtitle_track,
+            subtitle_file,
+            audio_filter=audio_filter,
+        )
         return " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
     
     def get_command_breakdown(
@@ -147,7 +180,8 @@ class FFmpegTranslator:
         input_file: Path,
         output_file: Path,
         audio_track: int,
-        subtitle_track: Optional[int] = None
+        subtitle_track: Optional[int] = None,
+        audio_filter: Optional[str] = None,
     ) -> dict:
         """Get a breakdown of the FFmpeg command"""
         width, height = self.preset.get_video_resolution()
@@ -168,7 +202,8 @@ class FFmpegTranslator:
                 "codec": "aac" if self.preset.get_audio_encoder() == "av_aac" else self.preset.get_audio_encoder(),
                 "bitrate": f"{self.preset.get_audio_bitrate()}k",
                 "mixdown": self.preset.get_audio_mixdown(),
-                "track": audio_track
+                "track": audio_track,
+                "filter": audio_filter if audio_filter and audio_filter.strip() else None,
             },
             "subtitle": {
                 "track": subtitle_track,
