@@ -130,6 +130,36 @@ def get_stylesheet() -> str:
         color: {T.APP_TEXT};
         spacing: 8px;
     }}
+    QRadioButton::indicator {{
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        border: 2px solid {T.APP_TEXT_DIM};
+        background-color: {T.APP_BG_SUNKEN};
+    }}
+    QRadioButton::indicator:hover {{
+        border: 2px solid {T.APP_BLUE_LIGHT};
+    }}
+    QRadioButton::indicator:checked {{
+        border: 3px solid {T.APP_BLUE_LIGHT};
+        background-color: {T.APP_BLUE};
+        /* Light center reads as a classic radio “dot” inside the ring */
+        background: qradialgradient(
+            spread:pad, cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+            stop:0 {T.APP_BLUE_LIGHT},
+            stop:0.35 {T.APP_BLUE_LIGHT},
+            stop:0.4 {T.APP_BLUE},
+            stop:1 {T.APP_BLUE}
+        );
+    }}
+    QRadioButton::indicator:disabled {{
+        border: 2px solid {T.APP_BUTTON_DISABLED_BG};
+        background-color: {T.APP_BG_RAISED};
+    }}
+    QRadioButton::indicator:checked:disabled {{
+        background-color: {T.APP_BUTTON_DISABLED_BG};
+        border: 2px solid {T.APP_BORDER};
+    }}
     QLabel {{
         color: {T.APP_TEXT};
     }}
