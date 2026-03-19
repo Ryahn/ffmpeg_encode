@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QCloseEvent, QIcon
+from PyQt6.QtGui import QCloseEvent, QIcon, QResizeEvent
 from PyQt6.QtWidgets import (
     QMainWindow,
     QStatusBar,
@@ -145,6 +145,10 @@ class MainWindow(QMainWindow):
         else:
             n = len(self.files_tab.get_files())
             self._status.showMessage(f"Ready - {n} file(s) in queue")
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.toast_manager.reposition_active_toast()
 
     def _on_tab_changed(self, index: int) -> None:
         if index == self._tab_index_files:

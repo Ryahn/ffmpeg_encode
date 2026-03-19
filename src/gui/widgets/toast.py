@@ -39,10 +39,14 @@ class ToastManager:
     def __init__(self, main_window: QMainWindow):
         self._main = main_window
         self._bridge = _ToastBridge(main_window)
-        self._bridge.request_show.connect(self._show_impl)
+        self._bridge.request_show.connect(
+            self._show_impl,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._queue: List[Tuple[str, str, int]] = []
         self._lock = threading.Lock()
         self._current_timer: Optional[QTimer] = None
+        self._active_frame: Optional[QFrame] = None
 
     def show(
         self,
@@ -87,6 +91,7 @@ class ToastManager:
 
         frame.adjustSize()
         frame.raise_()
+        self._active_frame = frame
         self._position_toast(frame, central)
 
         if self._current_timer:
@@ -98,7 +103,6 @@ class ToastManager:
 
     def _position_toast(self, frame: QFrame, central: QWidget) -> None:
         frame.show()
-        m = self._main.geometry()
         c = central.geometry()
         margin = 20
         x = c.width() - frame.width() - margin
@@ -109,7 +113,20 @@ class ToastManager:
             y = 10
         frame.move(x, y)
 
+    def reposition_active_toast(self) -> None:
+        """Keep the visible toast anchored after main-window resize."""
+        frame = self._active_frame
+        central = self._main.centralWidget()
+        if frame is None or central is None:
+            return
+        try:
+            self._position_toast(frame, central)
+        except Exception:
+            pass
+
     def _dismiss_current(self, frame: QFrame) -> None:
+        if self._active_frame is frame:
+            self._active_frame = None
         try:
             frame.deleteLater()
         except Exception:
