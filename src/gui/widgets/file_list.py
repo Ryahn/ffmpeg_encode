@@ -12,14 +12,6 @@ from PyQt6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QTable
 from core.file_scanner import FileScanner
 
 
-def _truncate_path(path_str: str, max_chars: int, show_end: bool = True) -> str:
-    if len(path_str) <= max_chars:
-        return path_str
-    if show_end:
-        return "..." + path_str[-(max_chars - 3) :]
-    return path_str[: max_chars - 3] + "..."
-
-
 class _DropTable(QTableWidget):
     """Table that accepts file/folder drops and forwards local paths to the owner."""
 
@@ -77,15 +69,23 @@ class FileListWidget(QWidget):
 
         self._table = _DropTable(self, 0, 5)
         self._table.setHorizontalHeaderLabels(["", "Source Path", "Size", "Tracks", "Status"])
-        self._table.horizontalHeader().setSectionResizeMode(self.COL_PATH, QHeaderView.ResizeMode.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(self.COL_SEL, QHeaderView.ResizeMode.Fixed)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(self.COL_SEL, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(self.COL_PATH, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(self.COL_SIZE, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(self.COL_TRACKS, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(self.COL_SEL, 36)
+        self._table.setColumnWidth(self.COL_PATH, 380)
+        self._table.setColumnWidth(self.COL_TRACKS, 200)
+        self._table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.setShowGrid(True)
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        self._table.horizontalHeader().sectionResized.connect(self._on_path_section_resized)
 
         from PyQt6.QtWidgets import QVBoxLayout
 
@@ -97,14 +97,20 @@ class FileListWidget(QWidget):
         if self.on_paths_dropped:
             self.on_paths_dropped(paths)
 
-    def _path_column_max_chars(self) -> int:
-        w = self._table.columnWidth(self.COL_PATH)
-        return max(15, w // 8)
+    def _path_cell_elided_display(self, path_str: str) -> str:
+        wpx = self._path_cell_available_width_px()
+        return self._table.fontMetrics().elidedText(path_str, Qt.TextElideMode.ElideMiddle, wpx)
+
+    def _path_cell_available_width_px(self) -> int:
+        col_w = self._table.columnWidth(self.COL_PATH)
+        if col_w <= 1:
+            vw = self._table.viewport().width()
+            col_w = max(120, vw // 2) if vw > 0 else 260
+        return max(40, col_w - 28)
 
     def _row_values(self, file_data: Dict) -> tuple:
         path_str = str(file_data["display_path"])
-        max_chars = self._path_column_max_chars()
-        display_path = _truncate_path(path_str, max_chars, show_end=True)
+        display_path = self._path_cell_elided_display(path_str)
         track_str = ""
         if file_data.get("audio_track"):
             track_str += f"Audio: {file_data['audio_track']}"
@@ -169,6 +175,11 @@ class FileListWidget(QWidget):
         self._sort_column = logical_index
         self._reapply_sort()
 
+    def _on_path_section_resized(self, logical_index: int, _old_size: int, _new_size: int) -> None:
+        if logical_index != self.COL_PATH:
+            return
+        self._refresh_path_cells()
+
     def _reapply_sort(self) -> None:
         if self._sort_column is None or not self.files:
             return
@@ -198,6 +209,7 @@ class FileListWidget(QWidget):
         for idx, fd in enumerate(self.files):
             self._set_row(idx, fd)
         self._table.blockSignals(False)
+        QTimer.singleShot(0, self._refresh_path_cells)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -252,6 +264,7 @@ class FileListWidget(QWidget):
         row = len(self.files) - 1
         self._table.insertRow(row)
         self._set_row(row, file_data)
+        QTimer.singleShot(0, self._refresh_path_cells)
         return file_data
 
     def update_file(self, index: int, **kwargs):

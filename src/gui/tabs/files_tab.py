@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -121,6 +122,9 @@ class FilesTab(QWidget):
         row1.addWidget(QLabel("Scan Folder:"))
         self.scan_folder_label = QLabel("Not selected")
         self.scan_folder_label.setMinimumWidth(300)
+        self.scan_folder_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         row1.addWidget(self.scan_folder_label)
         row1.addWidget(self._btn("Browse", self._browse_scan_folder))
         row1.addWidget(self._btn("Scan", self._scan_folder))
@@ -142,6 +146,9 @@ class FilesTab(QWidget):
         row2.addWidget(self._radio_input)
         row2.addWidget(self._radio_custom)
         self.output_folder_label = QLabel("Not selected")
+        self.output_folder_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         row2.addWidget(self.output_folder_label, stretch=1)
         row2.addWidget(self._btn("Select output folder", self._browse_output_folder))
         row2.addWidget(self._btn("Clear", self._clear_output_folder))
@@ -154,6 +161,10 @@ class FilesTab(QWidget):
         self.strip_entry.textChanged.connect(self._on_strip_changed)
         row3.addWidget(self.strip_entry)
         self.preview_label = QLabel("Result: (select Output folder to see preview)")
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         row3.addWidget(self.preview_label, stretch=1)
         cv.addLayout(row3)
 
@@ -313,9 +324,12 @@ class FilesTab(QWidget):
     def _update_preview(self) -> None:
         p = self._compute_preview_path()
         if p:
-            self.preview_label.setText(f"Result: {p}")
+            text = f"Result: {p}"
+            self.preview_label.setText(text)
+            self.preview_label.setToolTip(text)
         else:
             self.preview_label.setText("Result: (select Output folder to see preview)")
+            self.preview_label.setToolTip("")
 
     def _update_output_path_visibility(self) -> None:
         custom = self._radio_custom.isChecked()
