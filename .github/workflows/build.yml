@@ -54,8 +54,9 @@ jobs:
         shell: pwsh
         run: |
           # Portable ZIP = onedir folder (dist/ffmpeg_encode), not single exe
+          $v = "${{ steps.tag_version.outputs.version }}"
           New-Item -ItemType Directory -Force -Path dist_portable | Out-Null
-          Compress-Archive -Path dist\ffmpeg_encode -DestinationPath dist_portable\ffmpeg_encode-portable.zip
+          Compress-Archive -Path dist\ffmpeg_encode -DestinationPath "dist_portable\ffmpeg_encode-portable-$v.zip"
       
       - name: Create installer
         shell: pwsh
@@ -66,10 +67,10 @@ jobs:
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg_encode-Windows
+          name: ffmpeg_encode-Windows-${{ steps.tag_version.outputs.version }}
           path: |
-            dist_portable/ffmpeg_encode-portable.zip
-            dist_installer/ffmpeg_encode-Setup.exe
+            dist_portable/ffmpeg_encode-portable-*.zip
+            dist_installer/ffmpeg_encode-Setup-*.exe
           retention-days: 30
   
   build-macos:
@@ -140,23 +141,25 @@ jobs:
       
       - name: Create DMG
         run: |
+          VERSION="${{ steps.tag_version.outputs.version }}"
           mkdir -p dmg_package
           cp -R dist_app/ffmpeg_encode.app dmg_package/
-          hdiutil create -volname "ffmpeg_encode" -srcfolder dmg_package -ov -format UDZO dist/ffmpeg_encode.dmg || true
+          hdiutil create -volname "ffmpeg_encode" -srcfolder dmg_package -ov -format UDZO "dist/ffmpeg_encode-${VERSION}.dmg" || true
       
       - name: Create ZIP with .app
         run: |
+          VERSION="${{ steps.tag_version.outputs.version }}"
           cd dist_app
-          zip -r ../dist/ffmpeg_encode.zip ffmpeg_encode.app
+          zip -r "../dist/ffmpeg_encode-${VERSION}.zip" ffmpeg_encode.app
           cd ..
       
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg_encode-macOS
+          name: ffmpeg_encode-macOS-${{ steps.tag_version.outputs.version }}
           path: |
-            dist/ffmpeg_encode.dmg
-            dist/ffmpeg_encode.zip
+            dist/ffmpeg_encode-*.dmg
+            dist/ffmpeg_encode-*.zip
           retention-days: 30
           if-no-files-found: warn
   
@@ -175,22 +178,24 @@ jobs:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: ffmpeg_encode-Windows
+          pattern: ffmpeg_encode-Windows-*
           path: release_temp/
+          merge-multiple: true
       
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: ffmpeg_encode-macOS
+          pattern: ffmpeg_encode-macOS-*
           path: release_temp/
+          merge-multiple: true
       
       - name: Prepare release files
         run: |
           mkdir -p release
-          find release_temp -name "ffmpeg_encode-portable.zip" -exec cp {} release/ \;
-          find release_temp -name "ffmpeg_encode-Setup.exe" -exec cp {} release/ \;
-          find release_temp -name "ffmpeg_encode.dmg" -exec cp {} release/ \;
-          find release_temp -name "ffmpeg_encode.zip" -exec cp {} release/ \;
+          find release_temp -name "ffmpeg_encode-portable-*.zip" -exec cp {} release/ \;
+          find release_temp -name "ffmpeg_encode-Setup-*.exe" -exec cp {} release/ \;
+          find release_temp -name "ffmpeg_encode-*.dmg" -exec cp {} release/ \;
+          find release_temp -name "ffmpeg_encode-*.zip" -exec cp {} release/ \;
           ls -la release/
       
       - name: Create Release

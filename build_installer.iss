@@ -12,7 +12,8 @@ SetupIconFile=src\gui\icon.ico
 Compression=lzma2
 SolidCompression=yes
 OutputDir=dist_installer
-OutputBaseFilename=ffmpeg_encode-Setup
+; CI passes /DMyAppVersion from the git tag (e.g. 1.8.1) so the file is ffmpeg_encode-Setup-1.8.1.exe
+OutputBaseFilename=ffmpeg_encode-Setup-{#MyAppVersion}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
