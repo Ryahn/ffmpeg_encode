@@ -115,6 +115,15 @@ class Config:
                 return
             self._dirty = False
             self._write_config_file_locked()
+
+    def reload(self) -> None:
+        """Reload config.json from disk; cancel pending debounced save."""
+        with self._save_lock:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+                self._save_timer = None
+            self._dirty = False
+            self._load()
     
     def get(self, key: str, default: Any = None) -> Any:
         """Get a configuration value"""

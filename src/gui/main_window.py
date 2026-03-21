@@ -18,15 +18,18 @@ from PyQt6.QtWidgets import (
 
 from core.notifications import BatchNotification
 from core.package_manager import PackageManager
+from storage import dispose_engine
 from utils.config import config
 from utils.logger import logger
 
 from .tabs.about_tab import AboutTab
+from .tabs.backup_tab import BackupTab
 from .tabs.debug_tab import DebugTab
 from .tabs.files_tab import FilesTab
 from .tabs.ffmpeg_tab import FFmpegTab
 from .tabs.handbrake_tab import HandBrakeTab
 from .tabs.settings_tab import SettingsTab
+from .tabs.stats_tab import StatsTab
 from .widgets.toast import ToastManager
 
 
@@ -76,6 +79,13 @@ class MainWindow(QMainWindow):
         self.debug_tab = DebugTab()
         self.tab_widget.addTab(self.debug_tab, "Debug")
 
+        self.stats_tab = StatsTab()
+        self.tab_widget.addTab(self.stats_tab, "Stats")
+
+        self.backup_tab = BackupTab()
+        self.backup_tab.main_window = self
+        self.tab_widget.addTab(self.backup_tab, "Backup")
+
         self.about_tab = AboutTab()
         self.tab_widget.addTab(self.about_tab, "About")
 
@@ -83,6 +93,7 @@ class MainWindow(QMainWindow):
         self._tab_index_settings = self.tab_widget.indexOf(self.settings_tab)
         self._tab_index_ffmpeg = self.tab_widget.indexOf(self.ffmpeg_tab)
         self._tab_index_debug = self.tab_widget.indexOf(self.debug_tab)
+        self._tab_index_stats = self.tab_widget.indexOf(self.stats_tab)
         self.debug_tab.attach_follow_logging(self.tab_widget, self._tab_index_debug)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         self.settings_tab.main_window = self
@@ -159,6 +170,8 @@ class MainWindow(QMainWindow):
             self.ffmpeg_tab.apply_audio_normalize_settings_from_config()
         elif index == self._tab_index_debug:
             self.debug_tab.reload_from_config()
+        elif index == self._tab_index_stats:
+            self.stats_tab.reload_from_db()
 
     def refresh_encoder_clients(self) -> None:
         """Recreate encoders/analyzers after tool paths change in Settings."""
@@ -188,4 +201,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"Error stopping HandBrake encoder: {e}")
         config.flush()
+        try:
+            dispose_engine()
+        except Exception as e:
+            logger.warning(f"Error closing stats database: {e}")
         event.accept()

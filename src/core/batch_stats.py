@@ -107,11 +107,9 @@ class BatchStats:
 
     def format_size(self, size_bytes: int) -> str:
         """Format byte size to human-readable string"""
-        for unit in ["B", "KB", "MB", "GB", "TB"]:
-            if size_bytes < 1024.0:
-                return f"{size_bytes:.2f} {unit}"
-            size_bytes /= 1024.0
-        return f"{size_bytes:.2f} PB"
+        from utils.byte_format import format_bytes
+
+        return format_bytes(size_bytes)
 
     def format_compression_percent(self) -> str:
         """Get compression percentage as formatted string"""

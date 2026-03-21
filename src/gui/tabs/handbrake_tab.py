@@ -33,6 +33,7 @@ from core.notifications import BatchNotification
 from core.preset_parser import PresetParser
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import compute_effective_tracks
+from storage import record_successful_encode
 from utils.config import config
 from utils.logger import logger
 
@@ -484,6 +485,11 @@ class HandBrakeTab(QWidget):
                         output_size=output_size,
                         success=True,
                     )
+                if not dry_run:
+                    try:
+                        record_successful_encode(output_size, file_elapsed_time)
+                    except Exception as e:
+                        logger.warning(f"Could not update lifetime stats: {e}")
                 completed_count += 1
             else:
                 file_data["status"] = "Error"
