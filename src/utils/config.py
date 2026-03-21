@@ -46,7 +46,9 @@ class Config:
                 self.config = {}
         else:
             self.config = {}
-            self._set_defaults()
+
+        # Merge with defaults to ensure all required keys exist
+        self._ensure_defaults()
     
     def _set_defaults(self):
         """Set default configuration values"""
@@ -74,8 +76,57 @@ class Config:
             "audio_normalize_loudnorm_I": -16.0,
             "audio_normalize_loudnorm_TP": -1.5,
             "audio_normalize_loudnorm_LRA": 11.0,
+            # Subtitle handling configuration
+            "subtitle_handling": {
+                "pgs": "omit",                  # skip_file | omit | burn
+                "embedded_text": "mux",         # mux | burn | omit (applies to subrip, webvtt, etc.)
+                "embedded_ass": "external",     # external | mux | burn | omit
+                "external_text": "keep",        # keep | mux | both | burn | ignore
+                "external_ass": "keep",         # keep | mux | both | burn | ignore
+                "subtitle_source_priority": ["external", "embedded"]  # Which source to prefer
+            },
+            # UI behavior for subtitle handling
+            "show_strategy_preview": True,      # Show strategy column always, dialog only if warnings/skips
+            "warn_on_ass_mux": True,            # Warn when ASS muxed to MP4
+            "warn_on_burn": True,               # Warn when burn is chosen
+            # Encoder quality presets
+            "encoder_quality_preset": "balanced",  # "balanced" | "quality" | "compact"
+            "external_subtitle_tag": "default",    # "default" | "forced"
+            "quality_presets": {
+                "balanced": {
+                    "description": "Good quality, moderate file size",
+                    "crf": 28,
+                    "preset": "medium"
+                },
+                "quality": {
+                    "description": "Highest quality, larger files",
+                    "crf": 24,
+                    "preset": "slow"
+                },
+                "compact": {
+                    "description": "Smallest files, acceptable quality",
+                    "crf": 32,
+                    "preset": "faster"
+                }
+            }
         }
-    
+
+    def _ensure_defaults(self):
+        """Merge default configuration with loaded config to fill in missing keys"""
+        defaults = {}
+        self._set_defaults()
+        defaults = self.config.copy()
+
+        # Merge defaults into current config, preserving existing values
+        for key, default_value in defaults.items():
+            if key not in self.config:
+                self.config[key] = default_value
+            elif isinstance(default_value, dict) and isinstance(self.config.get(key), dict):
+                # For nested dicts, merge recursively
+                for nested_key, nested_default in default_value.items():
+                    if nested_key not in self.config[key]:
+                        self.config[key][nested_key] = nested_default
+
     def _write_config_file_locked(self) -> None:
         """Persist config; caller must hold _save_lock."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
@@ -505,6 +556,123 @@ class Config:
     def set_last_used_preset(self, name: str):
         """Set the last used preset name"""
         self.set("last_used_preset", name)
+
+    def get_subtitle_handling(self) -> dict:
+        """Get subtitle handling configuration"""
+        return self.get("subtitle_handling", {
+            "pgs": "omit",
+            "embedded_text": "mux",
+            "embedded_ass": "external",
+            "external_text": "keep",
+            "external_ass": "keep",
+            "subtitle_source_priority": ["external", "embedded"]
+        })
+
+    def set_subtitle_handling(self, config_dict: dict):
+        """Set subtitle handling configuration"""
+        self.set("subtitle_handling", config_dict)
+
+    def get_subtitle_pgs_action(self) -> str:
+        """Get PGS subtitle handling action"""
+        return self.get_subtitle_handling().get("pgs", "omit")
+
+    def set_subtitle_pgs_action(self, action: str):
+        """Set PGS subtitle handling action"""
+        config_dict = self.get_subtitle_handling()
+        config_dict["pgs"] = action
+        self.set_subtitle_handling(config_dict)
+
+    def get_subtitle_embedded_text_action(self) -> str:
+        """Get embedded text subtitle handling action"""
+        return self.get_subtitle_handling().get("embedded_text", "mux")
+
+    def set_subtitle_embedded_text_action(self, action: str):
+        """Set embedded text subtitle handling action"""
+        config_dict = self.get_subtitle_handling()
+        config_dict["embedded_text"] = action
+        self.set_subtitle_handling(config_dict)
+
+    def get_subtitle_embedded_ass_action(self) -> str:
+        """Get embedded ASS subtitle handling action"""
+        return self.get_subtitle_handling().get("embedded_ass", "external")
+
+    def set_subtitle_embedded_ass_action(self, action: str):
+        """Set embedded ASS subtitle handling action"""
+        config_dict = self.get_subtitle_handling()
+        config_dict["embedded_ass"] = action
+        self.set_subtitle_handling(config_dict)
+
+    def get_subtitle_external_text_action(self) -> str:
+        """Get external text subtitle handling action"""
+        return self.get_subtitle_handling().get("external_text", "keep")
+
+    def set_subtitle_external_text_action(self, action: str):
+        """Set external text subtitle handling action"""
+        config_dict = self.get_subtitle_handling()
+        config_dict["external_text"] = action
+        self.set_subtitle_handling(config_dict)
+
+    def get_subtitle_external_ass_action(self) -> str:
+        """Get external ASS subtitle handling action"""
+        return self.get_subtitle_handling().get("external_ass", "keep")
+
+    def set_subtitle_external_ass_action(self, action: str):
+        """Set external ASS subtitle handling action"""
+        config_dict = self.get_subtitle_handling()
+        config_dict["external_ass"] = action
+        self.set_subtitle_handling(config_dict)
+
+    def get_warn_on_ass_mux(self) -> bool:
+        """Get warn on ASS muxing setting"""
+        return self.get("warn_on_ass_mux", True)
+
+    def set_warn_on_ass_mux(self, value: bool):
+        """Set warn on ASS muxing setting"""
+        self.set("warn_on_ass_mux", value)
+
+    def get_warn_on_burn(self) -> bool:
+        """Get warn on burn setting"""
+        return self.get("warn_on_burn", True)
+
+    def set_warn_on_burn(self, value: bool):
+        """Set warn on burn setting"""
+        self.set("warn_on_burn", value)
+
+    def get_external_subtitle_tag(self) -> str:
+        """Get external subtitle tag ('default' or 'forced')"""
+        return self.get("external_subtitle_tag", "default")
+
+    def set_external_subtitle_tag(self, value: str):
+        """Set external subtitle tag ('default' or 'forced')"""
+        self.set("external_subtitle_tag", value)
+
+    def get_encoder_quality_preset(self) -> str:
+        """Get the encoder quality preset ('balanced', 'quality', or 'compact')"""
+        return self.get("encoder_quality_preset", "balanced")
+
+    def set_encoder_quality_preset(self, value: str):
+        """Set the encoder quality preset"""
+        if value in ("balanced", "quality", "compact"):
+            self.set("encoder_quality_preset", value)
+
+    def get_quality_preset_config(self, preset_name: str) -> dict:
+        """Get configuration for a quality preset"""
+        presets = self.get("quality_presets", {})
+        return presets.get(preset_name, presets.get("balanced", {}))
+
+    def get_quality_preset_crf(self, preset_name: str = None) -> int:
+        """Get CRF value for the current or specified preset"""
+        if preset_name is None:
+            preset_name = self.get_encoder_quality_preset()
+        config = self.get_quality_preset_config(preset_name)
+        return config.get("crf", 28)
+
+    def get_quality_preset_speed(self, preset_name: str = None) -> str:
+        """Get speed preset for the current or specified quality preset"""
+        if preset_name is None:
+            preset_name = self.get_encoder_quality_preset()
+        config = self.get_quality_preset_config(preset_name)
+        return config.get("preset", "medium")
 
 
 # Global config instance

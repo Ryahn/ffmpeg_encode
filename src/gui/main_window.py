@@ -27,6 +27,7 @@ from .tabs.backup_tab import BackupTab
 from .tabs.debug_tab import DebugTab
 from .tabs.files_tab import FilesTab
 from .tabs.ffmpeg_tab import FFmpegTab
+from .tabs.ffmpeg_settings_tab import FFmpegSettingsTab
 from .tabs.handbrake_tab import HandBrakeTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.stats_tab import StatsTab
@@ -73,6 +74,9 @@ class MainWindow(QMainWindow):
         self.ffmpeg_tab.get_output_path_callback = self._get_output_path
         self.ffmpeg_tab.main_window = self
 
+        self.ffmpeg_settings_tab = FFmpegSettingsTab()
+        self.tab_widget.addTab(self.ffmpeg_settings_tab, "FFmpeg Settings")
+
         self.settings_tab = SettingsTab()
         self.tab_widget.addTab(self.settings_tab, "Settings")
 
@@ -95,6 +99,10 @@ class MainWindow(QMainWindow):
         self._tab_index_debug = self.tab_widget.indexOf(self.debug_tab)
         self._tab_index_stats = self.tab_widget.indexOf(self.stats_tab)
         self.debug_tab.attach_follow_logging(self.tab_widget, self._tab_index_debug)
+
+        # Connect file selection to FFmpeg Settings tab
+        self.files_tab.file_list.on_file_selected = self._on_file_selected_for_ffmpeg
+
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         self.settings_tab.main_window = self
 
@@ -172,6 +180,11 @@ class MainWindow(QMainWindow):
             self.debug_tab.reload_from_config()
         elif index == self._tab_index_stats:
             self.stats_tab.reload_from_db()
+
+    def _on_file_selected_for_ffmpeg(self, file_path: Path) -> None:
+        """Callback when a file is selected in Files tab to update FFmpeg Settings."""
+        if self.ffmpeg_settings_tab:
+            self.ffmpeg_settings_tab.set_source_file(file_path)
 
     def refresh_encoder_clients(self) -> None:
         """Recreate encoders/analyzers after tool paths change in Settings."""

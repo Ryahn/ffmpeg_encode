@@ -22,6 +22,62 @@ OUTPUT_FILE_WAIT_MAX_RETRIES = 10
 OUTPUT_FILE_INITIAL_DELAY_SEC = 0.1
 OUTPUT_FILE_STABILITY_DELAY_SEC = 0.15
 
+# Subtitle codec grouping
+TEXT_SUBTITLE_CODECS = {"subrip", "ass", "ssa", "webvtt"}
+BITMAP_SUBTITLE_CODECS = {"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle"}
+
+# Container compatibility for subtitle muxing
+CONTAINER_SUBTITLE_SUPPORT = {
+    # (codec, container) -> (supported, method, warning)
+    ("subrip", "mp4"): (True, "mov_text", None),
+    ("ass", "mp4"): (True, "mov_text", "ASS styling may be lost when muxed to MP4"),
+    ("pgssub", "mp4"): (False, None, "PGS cannot be muxed into MP4"),
+    ("pgssub", "mkv"): (True, "copy", None),
+    ("ass", "mkv"): (True, "copy", None),
+    ("subrip", "mkv"): (True, "copy", None),
+}
+
+# Subtitle action types
+SUBTITLE_ACTION_TYPES = {"mux", "keep_external", "burn", "omit", "skip_file"}
+
+
+def can_mux_to_container(codec: str, container: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Check if subtitle codec can be muxed to target container.
+
+    Returns: (supported: bool, method: Optional[str], warning: Optional[str])
+    """
+    return CONTAINER_SUBTITLE_SUPPORT.get(
+        (codec, container),
+        (False, None, f"Muxing {codec} to {container} not supported")
+    )
+
+
+class SubtitleInfo:
+    """Normalized subtitle information from file detection"""
+
+    def __init__(self):
+        self.external_text: Optional[Path] = None    # Path to .srt/.vtt file
+        self.external_ass: Optional[Path] = None     # Path to .ass file
+        self.embedded: List[Dict[str, Any]] = []     # List of embedded subtitle streams
+                                                      # {"index": int, "codec": str, "type": "text"|"bitmap"}
+
+    @property
+    def has_any(self) -> bool:
+        """True if any subtitle source exists"""
+        return bool(self.external_text or self.external_ass or self.embedded)
+
+
+class SubtitleDecision:
+    """Result of applying subtitle policy to detected subtitles"""
+
+    def __init__(self, action: str = "omit", reason: str = "No subtitles found"):
+        self.action = action                         # One of SUBTITLE_ACTION_TYPES
+        self.reason = reason                         # Explanation of the decision
+        self.warnings: List[str] = []                # Warnings about the decision
+        self.source: Optional[str] = None            # "embedded_text"|"embedded_bitmap"|"external_text"|"external_ass"
+        self.stream_index: Optional[int] = None      # Index of embedded stream (if applicable)
+        self.codec: Optional[str] = None             # Codec name (subrip, ass, pgssub, etc.)
+
 # Try to import psutil for better process management (optional)
 try:
     import psutil
@@ -42,6 +98,192 @@ def format_cli_argv(argv: List[str]) -> str:
     if sys.platform == "win32":
         return subprocess.list2cmdline(argv)
     return shlex.join(argv)
+
+
+def detect_subtitles(video_file: Path, ffprobe_path: Optional[str] = None) -> SubtitleInfo:
+    """Detect all subtitle sources in a video file.
+
+    Checks for:
+    - External subtitle files (.srt, .ass) in the same directory
+    - Embedded subtitle streams using ffprobe
+
+    Args:
+        video_file: Path to the video file
+        ffprobe_path: Optional path to ffprobe executable. If None, uses "ffprobe" from PATH
+
+    Returns:
+        SubtitleInfo with detected external and embedded subtitle sources
+    """
+    info = SubtitleInfo()
+
+    # Check for external subtitle files
+    srt = video_file.with_suffix('.srt')
+    ass = video_file.with_suffix('.ass')
+
+    if srt.exists():
+        info.external_text = srt
+    if ass.exists():
+        info.external_ass = ass
+
+    # Probe for embedded subtitle streams
+    try:
+        ffprobe = ffprobe_path or "ffprobe"
+        cmd = [
+            ffprobe,
+            "-select_streams", "s",
+            "-show_entries", "stream=index,codec_name",
+            "-of", "json",
+            str(video_file)
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            import json
+            data = json.loads(result.stdout)
+            streams = data.get("streams", [])
+
+            for stream in streams:
+                index = stream.get("index")
+                codec = stream.get("codec_name", "unknown")
+
+                if codec in TEXT_SUBTITLE_CODECS:
+                    subtitle_type = "text"
+                elif codec in BITMAP_SUBTITLE_CODECS:
+                    subtitle_type = "bitmap"
+                else:
+                    # Unknown subtitle codec, treat as text
+                    subtitle_type = "text"
+
+                info.embedded.append({
+                    "index": index,
+                    "codec": codec,
+                    "type": subtitle_type
+                })
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError, json.JSONDecodeError) as e:
+        # If ffprobe fails, we silently continue with just external file detection
+        logger.debug(f"FFprobe failed to detect embedded subtitles: {e}")
+
+    return info
+
+
+def process_file_subtitles(
+    video_file: Path,
+    config: Dict[str, Any],
+    ffmpeg_path: str,
+    ffprobe_path: Optional[str] = None,
+    log_callback: Optional[Callable[[str, str], None]] = None
+) -> SubtitleDecision:
+    """Detect and decide subtitle handling for a file.
+
+    Integrates subtitle detection with policy application.
+
+    Args:
+        video_file: Path to the video file
+        config: Configuration dict with subtitle_handling settings
+        ffmpeg_path: Path to ffmpeg executable
+        ffprobe_path: Optional path to ffprobe executable
+        log_callback: Optional callback for logging decisions
+
+    Returns:
+        SubtitleDecision with the chosen action
+    """
+    # Import here to avoid circular imports
+    from core.subtitle_policy import decide_subtitle_action
+
+    # Detect subtitles
+    subtitle_info = detect_subtitles(video_file, ffprobe_path)
+
+    # Apply policy
+    decision = decide_subtitle_action(subtitle_info, config)
+
+    # Log if callback provided
+    if log_callback:
+        log_callback("INFO", f"Subtitle handling for {video_file.name}: {decision.reason}")
+        for warning in decision.warnings:
+            log_callback("WARNING", warning)
+
+    return decision
+
+
+def build_subtitle_ffmpeg_args(
+    decision: SubtitleDecision,
+    subtitle_info: SubtitleInfo,
+    base_args: List[str]
+) -> List[str]:
+    """Modify FFmpeg arguments based on subtitle decision.
+
+    Handles:
+    - Removing subtitle filters for mux/omit decisions
+    - Adding -map arguments for muxing
+    - Setting subtitle codec for muxing
+
+    Args:
+        decision: The subtitle decision from policy
+        subtitle_info: Detected subtitle sources
+        base_args: Original FFmpeg argument list
+
+    Returns:
+        Modified FFmpeg arguments
+    """
+    args = base_args.copy()
+
+    # Handle different actions
+    if decision.action == "mux":
+        # Remove subtitle burning filters
+        args = [arg for arg in args if not (
+            isinstance(arg, str) and (
+                arg.startswith("subtitles=") or
+                "subtitles=" in arg or
+                "-vf" in arg and "subtitles" in args[args.index(arg)+1] if args.index(arg)+1 < len(args) else False
+            )
+        )]
+
+        # Determine which subtitle stream to mux
+        if decision.source == "external_text":
+            # Will be added separately with -i
+            pass
+        elif decision.source in ("embedded_text", "embedded_ass"):
+            # Add -map argument for embedded stream
+            stream_index = decision.stream_index
+            if stream_index is not None:
+                # Add mapping for subtitle stream
+                if "-map" in args:
+                    # Insert after last -map
+                    last_map_idx = len(args) - 1 - args[::-1].index("-map") - 1
+                    args.insert(last_map_idx + 2, f"0:s:{stream_index}")
+                    args.insert(last_map_idx + 1, "-map")
+            # Add subtitle codec for muxing
+            if "-c:s" not in args:
+                args.extend(["-c:s", "mov_text"])
+
+    elif decision.action == "omit":
+        # Remove subtitle-related arguments and filters
+        new_args = []
+        skip_next = False
+        for i, arg in enumerate(args):
+            if skip_next:
+                skip_next = False
+                continue
+            if arg == "-map" and i + 1 < len(args) and "0:s" in args[i + 1]:
+                skip_next = True
+                continue
+            if arg.startswith("subtitles=") or "subtitles=" in arg:
+                continue
+            new_args.append(arg)
+        args = new_args
+
+    elif decision.action == "skip_file":
+        # Return empty args as signal to skip
+        return []
+
+    return args
 
 
 class EncodingProgress:
@@ -191,9 +433,12 @@ class Encoder:
             
             # Check if encoder executable exists
             encoder_exe = args[0] if args else None
-            if encoder_exe and not encoder_exe.startswith("ffmpeg") and not Path(encoder_exe).exists():
-                self._log("ERROR", f"Encoder executable not found: {encoder_exe}")
-                return False
+            if encoder_exe:
+                # Strip quotes that may have been added by shlex.quote()
+                encoder_exe_check = encoder_exe.strip("'\"")
+                if not encoder_exe_check.startswith("ffmpeg") and not Path(encoder_exe_check).exists():
+                    self._log("ERROR", f"Encoder executable not found: {encoder_exe_check}")
+                    return False
             
             self._log("INFO", f"Launching {encoder_name} process...")
             try:
@@ -673,6 +918,93 @@ def extract_subtitle_stream(
 
         if result.returncode == 0 and output_file.exists():
             if output_file.stat().st_size > 0:
+                return output_file, None
+            output_file.unlink()
+            return _fail(result.stderr, None)
+
+        return _fail(result.stderr, None)
+    except (subprocess.TimeoutExpired, OSError, FileNotFoundError) as e:
+        return _fail(None, e)
+
+
+def extract_text_subtitle_to_file(
+    ffmpeg_path: str,
+    input_file: Path,
+    subtitle_codec: str,
+    subtitle_stream_id: int,
+    output_file: Path
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Extract a text-based subtitle stream to .srt or .ass file.
+
+    Only works for text subtitle codecs (subrip, ass, webvtt, ssa).
+    Skips bitmap subtitles (pgssub, hdmv_pgs_subtitle, dvd_subtitle).
+
+    Args:
+        ffmpeg_path: Path to ffmpeg executable
+        input_file: Source video file
+        subtitle_codec: Codec name (subrip, ass, ssa, webvtt, etc.)
+        subtitle_stream_id: Stream index in input file
+        output_file: Output file path (should be .srt or .ass based on codec)
+
+    Returns:
+        (output_file_path, None) on success, or (None, error_message) on failure
+    """
+    # Skip bitmap subtitles - they cannot be extracted to text files
+    if subtitle_codec in BITMAP_SUBTITLE_CODECS:
+        return None, f"Cannot extract bitmap subtitle codec '{subtitle_codec}' to text file"
+
+    # Map codec to output format
+    codec_to_format = {
+        "subrip": "srt",
+        "ass": "ass",
+        "ssa": "ass",
+        "webvtt": "vtt",
+    }
+
+    if subtitle_codec not in codec_to_format:
+        return None, f"Unsupported subtitle codec '{subtitle_codec}'"
+
+    def _fail(stderr: Optional[str], exc: Optional[BaseException] = None) -> Tuple[Optional[Path], Optional[str]]:
+        if output_file.exists():
+            try:
+                output_file.unlink()
+            except OSError:
+                pass
+        detail = (stderr or "").strip()
+        if exc is not None:
+            detail = f"{type(exc).__name__}: {exc}" + (f" | {detail}" if detail else "")
+        if len(detail) > 1200:
+            detail = detail[:1200] + "…"
+        if detail:
+            logger.error("Text subtitle extraction failed: %s", detail)
+        else:
+            logger.error("Text subtitle extraction failed (no stderr)")
+        return None, detail or None
+
+    try:
+        args = [
+            ffmpeg_path,
+            "-i", str(input_file),
+            "-map", f"0:s:{subtitle_stream_id}",
+            "-c:s", "copy",
+            "-y",
+            str(output_file),
+        ]
+
+        run_kwargs = {
+            "args": args,
+            "stdin": subprocess.DEVNULL,
+            "capture_output": True,
+            "text": True,
+            "timeout": 120,
+        }
+        run_kwargs.update(get_subprocess_kwargs())
+
+        result = subprocess.run(**run_kwargs)
+
+        if result.returncode == 0 and output_file.exists():
+            if output_file.stat().st_size > 0:
+                logger.info(f"Extracted {subtitle_codec} subtitle to {output_file}")
                 return output_file, None
             output_file.unlink()
             return _fail(result.stderr, None)

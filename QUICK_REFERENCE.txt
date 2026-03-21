@@ -1,0 +1,241 @@
+================================================================================
+                    FFmpeg Settings Tab - Quick Reference Card
+================================================================================
+
+BASIC WORKFLOW
+==============
+1. Select file in Files tab
+2. Configure settings in FFmpeg Settings tab
+3. Click Copy to copy command
+4. Paste in FFmpeg tab
+5. Queue files and encode
+
+
+PLACEHOLDERS IN COMMANDS
+========================
+{INPUT}           = Input file path (e.g., C:\video.mkv)
+{OUTPUT}          = Output file path (e.g., C:\video_encoded.mp4)
+{AUDIO_TRACK}     = Audio track number (e.g., 2)
+{SUBTITLE_TRACK}  = Subtitle track number (e.g., 0)
+{SUBTITLE_FILE}   = External subtitle path (e.g., C:\subs.srt)
+
+Note: These are automatically replaced during encoding!
+
+
+QUALITY PRESETS
+===============
+Balanced (Default)  → CRF 28, medium speed, good quality
+Quality             → CRF 24, slow speed, best quality
+Compact             → CRF 32, faster speed, smallest files
+
+CRF Scale: 0=best quality, 51=worst. Lower=better, bigger files.
+
+
+VIDEO CODECS
+============
+HEVC GPU (hevc_nvenc)       → Best quality, fast (NVIDIA GPU required)
+H.264 GPU (h264_nvenc)      → Good quality, faster (NVIDIA GPU required)
+HEVC CPU (hevc_libx265)     → Best quality, very slow (no GPU needed)
+H.264 CPU (h264_libx264)    → Good quality, slow (no GPU needed)
+
+
+AUDIO SETTINGS
+==============
+Auto-Copy ON
+  • If audio is AAC/MP3/Opus → copy without re-encoding (fast)
+  • If audio is other → re-encode to configured codec
+
+Auto-Copy OFF
+  • Always re-encode to configured codec (slower but consistent)
+
+Bitrate Guide:
+  96k  = minimum quality
+  128k = balanced (default)
+  192k = high quality
+  256k+ = lossless quality
+
+
+SUBTITLE HANDLING
+=================
+External SRT/VTT files:
+  Keep      = Keep separate .srt file
+  Mux       = Embed in MP4 (Jellyfin plays without transcode)
+  Both      = Embed + keep external
+  Burn      = Embed in video (Jellyfin will transcode)
+
+External ASS files:
+  Keep      = Keep separate .ass file (preserves styling)
+  Mux       = Embed in MP4 (may lose styling, fonts)
+  Burn      = Embed in video (loses styling)
+
+Embedded SRT/Subs:
+  Mux       = Embed in output MP4
+  Omit      = Encode without subtitles
+
+Embedded PGS (bitmap):
+  Omit      = Encode video without subtitles
+  Burn      = Burn into video (slow Jellyfin playback)
+
+
+COMMON PRESETS
+==============
+AppleTV 1080p30 Auto    = Optimized for AppleTV, H.264/AAC
+
+
+KEYBOARD SHORTCUTS
+==================
+None specific to FFmpeg Settings
+(Use standard Copy/Paste: Ctrl+C / Ctrl+V)
+
+
+TROUBLESHOOTING
+===============
+"Unable to detect" resolution/audio?
+  → Make sure FFmpeg is properly installed and ffprobe is in PATH
+
+Encoding fails with path error?
+  → Check file path has no unusual special characters
+  → Try moving file to simpler path
+
+Audio codec unknown?
+  → Normal, will re-encode to AAC (MP4 compatible)
+
+Video looks different after encoding?
+  → If using Compact: intentional (lower quality for smaller size)
+  → Try Quality preset instead
+  → Check color settings on playback device
+
+
+TIPS & TRICKS
+=============
+To minimize file size:
+  • Use HEVC GPU codec (25-50% smaller than H.264)
+  • Use Compact quality preset
+  • Lower audio bitrate to 96k
+  • Don't burn subtitles (requires re-encoding)
+
+To maximize quality:
+  • Use Quality preset (CRF 24)
+  • Use HEVC GPU codec
+  • Higher audio bitrate (192k+)
+  • Keep source resolution (no scaling)
+
+For Jellyfin compatibility:
+  • Use soft subtitles (Mux or External)
+  • Don't burn subtitles
+  • Keep resolution reasonable (≤ 1080p)
+
+
+SETTING DESCRIPTIONS
+====================
+Preset
+  Choose a pre-configured encoding template (AppleTV, etc.)
+
+Quality Preset
+  Balanced = good quality, normal speed (RECOMMENDED)
+  Quality  = best quality, slower
+  Compact  = smallest files, faster
+
+Video Codec
+  Choose which encoder to use
+
+CRF (Quality Slider)
+  0-51 range, lower = better quality
+  Default 28 for Balanced preset
+
+Preset Speed
+  How to balance quality vs encoding speed
+
+Video Profile
+  Encoding profile (main, high, etc.)
+
+Video Level
+  Encoding level (4.0, 4.1, etc.)
+
+Upscale to 1080p
+  If OFF: keeps source resolution (recommended)
+  If ON: forces 1080p (may look worse if source is smaller)
+
+Auto-Copy Audio
+  If ON: copy audio if compatible (fast)
+  If OFF: always re-encode (slower)
+
+Audio Codec
+  What codec to use if re-encoding
+
+Audio Bitrate
+  How much data to use for audio (higher = better)
+
+
+COMMAND EXAMPLE
+===============
+Input Template:
+  ffmpeg -i {INPUT} -c:v hevc_nvenc -cq 28 -y {OUTPUT}
+
+After Substitution:
+  ffmpeg -i C:\video.mkv -c:v hevc_nvenc -cq 28 -y C:\video_encoded.mp4
+
+What Happens:
+  1. ffmpeg reads C:\video.mkv
+  2. Encodes video with HEVC GPU codec at quality 28
+  3. Writes to C:\video_encoded.mp4
+
+
+FILE SIZE COMPARISON
+====================
+Original file:        200 MB
+Balanced preset:      120 MB (40% smaller)
+Quality preset:       140 MB (30% smaller)
+Compact preset:        90 MB (55% smaller)
+
+Codec comparison:
+H.264 (h264_nvenc):   100 MB
+HEVC (hevc_nvenc):     60 MB (40% smaller)
+
+
+JELLYFIN NOTES
+==============
+Soft subtitles (Mux):  ✓ Plays without transcode
+Burned subtitles:      ✗ Jellyfin re-encodes on playback (slow)
+External subtitles:    ✓ Works with Jellyfin subtitle support
+
+Best practice: Use Mux strategy for internal subtitles
+
+
+PERFORMANCE EXPECTATIONS
+========================
+720p source:   5-10 minutes per hour (with HEVC GPU)
+1080p source:  10-20 minutes per hour (with HEVC GPU)
+4K source:     30-60 minutes per hour (with HEVC GPU)
+
+Times are approximate and depend on CPU/GPU and quality settings
+
+
+SUPPORTED VIDEO CODECS
+======================
+Input:  H.264, H.265, VP8, VP9, AV1, and many others
+Output: H.264, H.265, and more (depends on FFmpeg installation)
+
+
+SUPPORTED AUDIO CODECS
+======================
+Input:  AAC, MP3, Opus, FLAC, DTS, AC3, and many others
+Output: AAC (default), MP3, Opus, FLAC, and more
+
+
+SUPPORTED SUBTITLE FORMATS
+===========================
+External:  SRT, VTT, ASS, SSA
+Embedded:  SRT, ASS, PGS, and others
+
+
+GETTING HELP
+============
+• User Guide:          FFMPEG_SETTINGS_USER_GUIDE.md
+• Technical Details:   FFMPEG_SETTINGS_TECHNICAL_REFERENCE.md
+• Implementation Info: IMPLEMENTATION_STATUS.md
+
+
+================================================================================
+                            Last Updated: March 20, 2026
+================================================================================

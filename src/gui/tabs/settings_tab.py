@@ -9,6 +9,7 @@ from typing import Any, List
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -46,6 +47,7 @@ class SettingsTab(QWidget):
         root.addWidget(self._output_group())
         root.addWidget(self._files_defaults_group())
         root.addWidget(self._encoding_group())
+        root.addWidget(self._subtitle_group())
         root.addWidget(self._track_group())
         root.addStretch()
 
@@ -305,6 +307,121 @@ class SettingsTab(QWidget):
 
     def _persist_mode(self) -> None:
         config.set_encoding_mode("parallel" if self._m_par.isChecked() else "sequential")
+
+    def _subtitle_group(self) -> QGroupBox:
+        """Subtitle handling settings group"""
+        g = QGroupBox("Subtitle Handling")
+        v = QVBoxLayout(g)
+
+        # PGS subtitles
+        pgs_form = QFormLayout()
+        self.pgs_combo = QComboBox()
+        self.pgs_combo.addItem("Omit subtitles", "omit")
+        self.pgs_combo.addItem("Skip file", "skip_file")
+        self.pgs_combo.addItem("Burn into video ⚠️", "burn")
+        self.pgs_combo.setCurrentText(self._find_combo_text(config.get_subtitle_pgs_action(), self.pgs_combo))
+        self.pgs_combo.currentIndexChanged.connect(
+            lambda: config.set_subtitle_pgs_action(self.pgs_combo.currentData())
+        )
+        pgs_form.addRow("PGS Subtitles (bitmap):", self.pgs_combo)
+        v.addLayout(pgs_form)
+
+        # Embedded text (SRT, WebVTT)
+        text_form = QFormLayout()
+        self.embedded_text_combo = QComboBox()
+        self.embedded_text_combo.addItem("Mux into MP4", "mux")
+        self.embedded_text_combo.addItem("Burn into video ⚠️", "burn")
+        self.embedded_text_combo.addItem("Omit subtitles", "omit")
+        self.embedded_text_combo.setCurrentText(
+            self._find_combo_text(config.get_subtitle_embedded_text_action(), self.embedded_text_combo)
+        )
+        self.embedded_text_combo.currentIndexChanged.connect(
+            lambda: config.set_subtitle_embedded_text_action(self.embedded_text_combo.currentData())
+        )
+        text_form.addRow("Embedded Text Subtitles (SRT, WebVTT):", self.embedded_text_combo)
+        v.addLayout(text_form)
+
+        # Embedded ASS
+        ass_form = QFormLayout()
+        self.embedded_ass_combo = QComboBox()
+        self.embedded_ass_combo.addItem("Keep external", "external")
+        self.embedded_ass_combo.addItem("Mux into MP4 ⚠️", "mux")
+        self.embedded_ass_combo.addItem("Burn into video ⚠️", "burn")
+        self.embedded_ass_combo.addItem("Omit subtitles", "omit")
+        self.embedded_ass_combo.setCurrentText(
+            self._find_combo_text(config.get_subtitle_embedded_ass_action(), self.embedded_ass_combo)
+        )
+        self.embedded_ass_combo.currentIndexChanged.connect(
+            lambda: config.set_subtitle_embedded_ass_action(self.embedded_ass_combo.currentData())
+        )
+        ass_form.addRow("Embedded ASS Subtitles (styled):", self.embedded_ass_combo)
+        v.addLayout(ass_form)
+
+        # External subtitle naming
+        ext_form = QFormLayout()
+        self.external_sub_tag_combo = QComboBox()
+        self.external_sub_tag_combo.addItem("Default", "default")
+        self.external_sub_tag_combo.addItem("Forced", "forced")
+        self.external_sub_tag_combo.setCurrentText(
+            self._find_combo_text(config.get_external_subtitle_tag(), self.external_sub_tag_combo)
+        )
+        self.external_sub_tag_combo.currentIndexChanged.connect(
+            lambda: config.set_external_subtitle_tag(self.external_sub_tag_combo.currentData())
+        )
+        ext_form.addRow("External Subtitle Tag:", self.external_sub_tag_combo)
+        v.addLayout(ext_form)
+
+        # Encoder quality presets
+        quality_form = QFormLayout()
+        self.quality_preset_combo = QComboBox()
+        self.quality_preset_combo.addItem("Balanced", "balanced")
+        self.quality_preset_combo.addItem("Quality (larger files)", "quality")
+        self.quality_preset_combo.addItem("Compact (smaller files)", "compact")
+        self.quality_preset_combo.setCurrentText(
+            self._find_combo_text(config.get_encoder_quality_preset(), self.quality_preset_combo)
+        )
+        self.quality_preset_combo.currentIndexChanged.connect(
+            lambda: (config.set_encoder_quality_preset(self.quality_preset_combo.currentData()),
+                    self._update_quality_preset_info())
+        )
+        quality_form.addRow("Encoder Quality Preset:", self.quality_preset_combo)
+
+        self.quality_preset_info = QLabel()
+        self._update_quality_preset_info()
+        quality_form.addRow("", self.quality_preset_info)
+        v.addLayout(quality_form)
+
+        # Warning toggles
+        warn_form = QFormLayout()
+        self.warn_ass_cb = QCheckBox("Warn when ASS is muxed to MP4")
+        self.warn_ass_cb.setChecked(config.get_warn_on_ass_mux())
+        self.warn_ass_cb.toggled.connect(lambda x: config.set_warn_on_ass_mux(x))
+        warn_form.addRow("", self.warn_ass_cb)
+
+        self.warn_burn_cb = QCheckBox("Warn when subtitles are burned")
+        self.warn_burn_cb.setChecked(config.get_warn_on_burn())
+        self.warn_burn_cb.toggled.connect(lambda x: config.set_warn_on_burn(x))
+        warn_form.addRow("", self.warn_burn_cb)
+        v.addLayout(warn_form)
+
+        return g
+
+    def _update_quality_preset_info(self) -> None:
+        """Update the quality preset info label"""
+        preset_name = self.quality_preset_combo.currentData()
+        preset_config = config.get_quality_preset_config(preset_name)
+        crf = preset_config.get("crf", 28)
+        speed = preset_config.get("preset", "medium")
+        desc = preset_config.get("description", "")
+        info_text = f"{desc} (CRF: {crf}, Speed: {speed})"
+        self.quality_preset_info.setText(info_text)
+
+    def _find_combo_text(self, value: str, combo: QComboBox) -> str:
+        """Find the text of a combo box item by its data value"""
+        for i in range(combo.count()):
+            if combo.itemData(i) == value:
+                return combo.itemText(i)
+        return combo.itemText(0)  # Default to first item
 
     def reload_from_config(self) -> None:
         """Refresh widgets from config (when user opens this tab)."""

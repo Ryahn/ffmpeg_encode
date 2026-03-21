@@ -55,7 +55,8 @@ class FileListWidget(QWidget):
     COL_PATH = 1
     COL_SIZE = 2
     COL_TRACKS = 3
-    COL_STATUS = 4
+    COL_SUBTITLE = 4
+    COL_STATUS = 5
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -67,17 +68,19 @@ class FileListWidget(QWidget):
         self._sort_reverse = False
         self._refresh_timer: Optional[QTimer] = None
 
-        self._table = _DropTable(self, 0, 5)
-        self._table.setHorizontalHeaderLabels(["", "Source Path", "Size", "Tracks", "Status"])
+        self._table = _DropTable(self, 0, 6)
+        self._table.setHorizontalHeaderLabels(["", "Source Path", "Size", "Tracks", "Subtitle Strategy", "Status"])
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(self.COL_SEL, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(self.COL_PATH, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(self.COL_SIZE, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(self.COL_TRACKS, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(self.COL_SUBTITLE, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(self.COL_SEL, 36)
-        self._table.setColumnWidth(self.COL_PATH, 380)
-        self._table.setColumnWidth(self.COL_TRACKS, 200)
+        self._table.setColumnWidth(self.COL_PATH, 320)
+        self._table.setColumnWidth(self.COL_TRACKS, 150)
+        self._table.setColumnWidth(self.COL_SUBTITLE, 150)
         self._table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -86,6 +89,7 @@ class FileListWidget(QWidget):
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self._table.horizontalHeader().sectionResized.connect(self._on_path_section_resized)
+        self._table.itemSelectionChanged.connect(self._on_row_selected)
 
         from PyQt6.QtWidgets import QVBoxLayout
 
@@ -155,6 +159,12 @@ class FileListWidget(QWidget):
         it_tr.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self._table.setItem(row, self.COL_TRACKS, it_tr)
 
+        # Subtitle strategy column
+        subtitle_strategy = file_data.get("subtitle_strategy", "—")
+        it_sub = QTableWidgetItem(subtitle_strategy)
+        it_sub.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        self._table.setItem(row, self.COL_SUBTITLE, it_sub)
+
         it_st = QTableWidgetItem(status)
         it_st.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self._table.setItem(row, self.COL_STATUS, it_st)
@@ -180,6 +190,22 @@ class FileListWidget(QWidget):
             return
         self._refresh_path_cells()
 
+    def _on_row_selected(self) -> None:
+        """Handle row selection - notify listener of selected file."""
+        if not self.on_file_selected:
+            return
+
+        selected_rows = self._table.selectionModel().selectedRows()
+        if not selected_rows:
+            return
+
+        # Get the first selected row
+        row_index = selected_rows[0].row()
+        if 0 <= row_index < len(self.files):
+            file_dict = self.files[row_index]
+            file_path = Path(file_dict["path"])
+            self.on_file_selected(file_path)
+
     def _reapply_sort(self) -> None:
         if self._sort_column is None or not self.files:
             return
@@ -193,6 +219,8 @@ class FileListWidget(QWidget):
                 return f.get("size", 0)
             if c == self.COL_TRACKS:
                 return (str(f.get("audio_track", "")), str(f.get("subtitle_track", "")))
+            if c == self.COL_SUBTITLE:
+                return f.get("subtitle_strategy", "").lower()
             if c == self.COL_STATUS:
                 return f.get("status", "").lower()
             return i

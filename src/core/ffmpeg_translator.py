@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional, List
 from .preset_parser import PresetParser
+from utils.config import config
 
 
 def _escape_ffmpeg_filter_path(path: str) -> str:
@@ -67,15 +68,33 @@ class FFmpegTranslator:
         video_encoder = self.preset.get_video_encoder()
         if video_encoder == "x264":
             cmd.extend(["-c:v", "libx264"])
+        elif video_encoder == "x265":
+            cmd.extend(["-c:v", "hevc_nvenc"])
         else:
             cmd.extend(["-c:v", video_encoder])
         
-        # Video quality (CRF)
+        # Video quality (CRF) - apply quality preset overrides if available
         crf = self.preset.get_video_quality()
+        try:
+            # Apply quality preset from config if available
+            quality_preset = config.get_encoder_quality_preset()
+            quality_crf = config.get_quality_preset_crf(quality_preset)
+            crf = quality_crf
+        except Exception:
+            # Fallback to preset's default if config is unavailable
+            pass
         cmd.extend(["-crf", str(crf)])
-        
-        # Video preset
+
+        # Video preset (speed) - apply quality preset overrides if available
         preset = self.preset.get_video_preset()
+        try:
+            # Apply quality preset from config if available
+            quality_preset = config.get_encoder_quality_preset()
+            quality_speed = config.get_quality_preset_speed(quality_preset)
+            preset = quality_speed
+        except Exception:
+            # Fallback to preset's default if config is unavailable
+            pass
         cmd.extend(["-preset", preset])
         
         # Video profile and level

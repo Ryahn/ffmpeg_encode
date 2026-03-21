@@ -147,6 +147,8 @@ def generate_command_preview(
     command = command_template
 
     def quote_path_if_needed(path_str: str) -> str:
+        # Escape square brackets for FFmpeg (they have special meaning in FFmpeg syntax)
+        path_str = path_str.replace('[', r'\[').replace(']', r'\]')
         if any(c in path_str for c in _PATH_QUOTE_CHARS):
             return f'"{path_str}"'
         return path_str
@@ -209,6 +211,8 @@ def parse_and_substitute_command(
         return path_str.replace("\\", "\\\\")
 
     def quote_path_if_needed(path_str: str) -> str:
+        # Escape square brackets for FFmpeg (they have special meaning in FFmpeg syntax)
+        path_str = path_str.replace('[', r'\[').replace(']', r'\]')
         if any(c in path_str for c in _PATH_QUOTE_CHARS):
             return f'"{path_str}"'
         return path_str
@@ -276,16 +280,19 @@ def parse_and_substitute_command(
 
     for i, arg in enumerate(args):
         if arg == "-i" and i + 1 < len(args):
-            input_path = args[i + 1].strip('"').strip("'")
+            # shlex.split() already handles quote parsing, so paths are clean
+            input_path = args[i + 1]
             if not Path(input_path).exists():
                 on_log("ERROR", f"Input file does not exist: {input_path}")
-            args[i + 1] = input_path
+            # args[i + 1] is already correct, no modification needed
         elif arg == "-y" and i + 1 < len(args):
-            args[i + 1] = args[i + 1].strip('"').strip("'")
+            # Output path is already correct from shlex.split()
+            pass
         elif i == len(args) - 1 and (
             arg.endswith(".mp4") or arg.endswith(".mkv") or arg.endswith(".avi")
         ):
-            args[i] = arg.strip('"').strip("'")
+            # Final output path is already correct from shlex.split()
+            pass
 
     if not args:
         return []

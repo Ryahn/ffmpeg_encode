@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import re
+import shlex
 import time
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -45,8 +46,9 @@ from ..widgets.log_viewer import LogViewer
 from ..widgets.progress_bar import ProgressDisplay
 from core.audio_normalize import build_integrated_loudnorm_filter
 from core.batch_stats import BatchStats
-from core.encoder import Encoder, EncodingProgress, extract_subtitle_stream
+from core.encoder import Encoder, EncodingProgress, extract_subtitle_stream, extract_text_subtitle_to_file, detect_subtitles, process_file_subtitles, TEXT_SUBTITLE_CODECS
 from core.ffmpeg_translator import FFmpegTranslator
+from core.subtitle_policy import decide_subtitle_action
 from core.notifications import BatchNotification
 from core.preset_parser import PresetParser
 from core.track_analyzer import TrackAnalyzer
@@ -131,6 +133,21 @@ class FFmpegTab(QWidget):
 
         cmd_gb = QGroupBox("FFmpeg command (editable)")
         cmd_l = QVBoxLayout(cmd_gb)
+
+        # Custom Command Override checkbox
+        override_layout = QHBoxLayout()
+        self.custom_command_override_cb = QCheckBox("Custom Command Override")
+        self.custom_command_override_cb.setChecked(False)
+        self.custom_command_override_cb.setToolTip(
+            "When checked, uses the command exactly as-is, bypassing all app settings "
+            "(subtitles, audio normalization, etc.). When unchecked, app settings optimize the command."
+        )
+        self.custom_command_override_cb.toggled.connect(self._on_custom_override_toggled)
+        override_layout.addWidget(self.custom_command_override_cb)
+        override_layout.addWidget(QLabel("⚠️ Bypasses subtitle handling, audio, and other settings"))
+        override_layout.addStretch()
+        cmd_l.addLayout(override_layout)
+
         self.cmd_text = QPlainTextEdit()
         self.cmd_text.setMinimumHeight(90)
         self.cmd_text.textChanged.connect(self._schedule_preview_update)
@@ -340,6 +357,13 @@ class FFmpegTab(QWidget):
         config.set_audio_normalize_loudnorm_LRA(self.loudnorm_LRA.value())
         self._refresh_preset_command_after_loudnorm()
 
+    def _on_custom_override_toggled(self, checked: bool) -> None:
+        """Handle Custom Command Override checkbox toggle."""
+        if checked:
+            self._on_log("WARNING", "Custom Command Override enabled - app settings will be bypassed")
+        else:
+            self._on_log("INFO", "Custom Command Override disabled - app settings will be applied")
+
     def _refresh_preset_command_after_loudnorm(self) -> None:
         self._apply_loudnorm_to_current_cmd_text()
         self._schedule_preview_update()
@@ -505,6 +529,9 @@ class FFmpegTab(QWidget):
         self._update_command_preview_display()
         self._on_log("INFO", f"Loaded preset: {preset_name}")
 
+        # Check for preset subtitle filter conflicts with subtitle policy
+        self._check_preset_subtitle_conflicts(preset_name, preset_path)
+
     def _on_preset_selected(self, choice: str) -> None:
         if not choice:
             return
@@ -529,6 +556,159 @@ class FFmpegTab(QWidget):
                         self.preset_combo.setCurrentIndex(i)
                 except Exception:
                     pass
+
+    def _check_preset_subtitle_conflicts(self, preset_name: str, preset_path: Path) -> None:
+        """Check if preset has subtitle burning filters that conflict with subtitle policy.
+
+        If conflicts are detected, offer user the option to update the preset.
+        """
+        # Get the current FFmpeg command
+        cmd = self.cmd_text.toPlainText().strip()
+
+        # Check if command contains subtitle filter
+        has_subtitle_filter = "-vf" in cmd and "subtitles=" in cmd or \
+                              "-filter_complex" in cmd and "subtitles=" in cmd
+
+        if not has_subtitle_filter:
+            return  # No subtitle filter, no conflict
+
+        # Get current subtitle policy - any non-omit setting will conflict with burning
+        subtitle_handling = config.get_subtitle_handling()
+        pgs_action = subtitle_handling.get("pgs", "omit")
+        embedded_text = subtitle_handling.get("embedded_text", "mux")
+        embedded_ass = subtitle_handling.get("embedded_ass", "external")
+        external_text = subtitle_handling.get("external_text", "keep")
+        external_ass = subtitle_handling.get("external_ass", "keep")
+
+        # Check if any non-omit policies are set
+        has_non_omit_policy = any([
+            pgs_action != "omit",
+            embedded_text != "omit",
+            embedded_ass != "omit",
+            external_text not in ("ignore", "omit"),
+            external_ass not in ("ignore", "omit")
+        ])
+
+        if not has_non_omit_policy:
+            return  # All policies are omit, no conflict
+
+        # Conflict detected - offer update or use as-is
+        reply = QMessageBox.warning(
+            self,
+            "Subtitle Filter Conflict",
+            f"Your preset '{preset_name}' contains a subtitle burning filter "
+            "(-vf subtitles=...), but your Subtitle Handling policy is set to:\n\n"
+            f"  • PGS: {pgs_action}\n"
+            f"  • Embedded text: {embedded_text}\n"
+            f"  • Embedded ASS: {embedded_ass}\n"
+            f"  • External text: {external_text}\n"
+            f"  • External ASS: {external_ass}\n\n"
+            "Burning subtitles will cause Jellyfin to re-encode on playback.\n\n"
+            "Options:\n"
+            "  • [Update Preset] - Remove the filter, use your subtitle policy\n"
+            "  • [Use As-Is] - Keep the filter (ignore your policy)\n"
+            "  • [Cancel] - Don't load this preset",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+        )
+
+        if reply == QMessageBox.StandardButton.Cancel:
+            # User cancelled, clear the preset
+            self.cmd_text.setPlainText("")
+            self.preset_combo.setCurrentIndex(0)
+            self._on_log("INFO", "Preset loading cancelled")
+            return
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Update preset - remove subtitle filter
+            self._remove_subtitle_filter_from_command()
+            self._on_log("INFO", f"Updated preset '{preset_name}' to remove subtitle filter")
+
+    def _remove_subtitle_filter_from_command(self) -> None:
+        """Remove subtitle burning filter from FFmpeg command."""
+        cmd = self.cmd_text.toPlainText()
+
+        # Remove -vf subtitles=... pattern (handles simple cases)
+        # Pattern to match -vf "..." with subtitles filter
+        cmd = re.sub(r'-vf\s+"[^"]*subtitles=[^"]*"', '', cmd)
+        cmd = re.sub(r"-vf\s+'[^']*subtitles=[^']*'", '', cmd)
+        # For unquoted -vf (less common)
+        cmd = re.sub(r'-vf\s+\S*subtitles=\S+\s+', '', cmd)
+
+        # Also handle -filter_complex with subtitles
+        cmd = re.sub(r'-filter_complex\s+"[^"]*subtitles=[^"]*"', '', cmd)
+        cmd = re.sub(r"-filter_complex\s+'[^']*subtitles=[^']*'", '', cmd)
+
+        # Clean up excess whitespace
+        cmd = re.sub(r'\s+', ' ', cmd).strip()
+
+        self.cmd_text.blockSignals(True)
+        self.cmd_text.setPlainText(cmd)
+        self.cmd_text.blockSignals(False)
+        self._update_command_preview_display()
+
+    def _remove_conflicting_subtitle_filters_from_args(self, ffmpeg_args: List[str], subtitle_decision) -> List[str]:
+        """Remove subtitle-related filters from FFmpeg args based on subtitle decision.
+
+        If we're handling a text subtitle (ASS/SRT), remove PGS overlay filters.
+        If we're omitting subtitles, remove all subtitle-related filters.
+
+        Args:
+            ffmpeg_args: List of FFmpeg arguments
+            subtitle_decision: SubtitleDecision with action and codec info
+
+        Returns:
+            Modified args list with conflicting filters removed
+        """
+        if not subtitle_decision:
+            return ffmpeg_args
+
+        # Check if we need to remove filters
+        needs_filter_removal = False
+
+        if subtitle_decision.action in ("omit", "skip_file"):
+            needs_filter_removal = True
+        elif (subtitle_decision.source and
+              subtitle_decision.source.startswith("embedded") and
+              subtitle_decision.codec and
+              subtitle_decision.codec not in ("pgssub", "hdmv_pgs_subtitle")):
+            # Text subtitle - check if there's an overlay filter to remove
+            for i, arg in enumerate(ffmpeg_args):
+                if 'overlay=' in arg or 'subtitles=' in arg:
+                    needs_filter_removal = True
+                    break
+
+        if not needs_filter_removal:
+            return ffmpeg_args
+
+        # Remove -filter_complex or -vf arguments that contain subtitle-related filters
+        new_args = []
+        i = 0
+        while i < len(ffmpeg_args):
+            arg = ffmpeg_args[i]
+
+            # Check if this is a filter flag
+            if arg in ('-filter_complex', '-vf'):
+                # Skip this flag and check the next argument
+                if i + 1 < len(ffmpeg_args):
+                    next_arg = ffmpeg_args[i + 1]
+                    # Check if filter contains overlay or subtitles
+                    if 'overlay=' in next_arg or 'subtitles=' in next_arg:
+                        # Skip both the flag and the filter argument
+                        i += 2
+                        self._on_log("DEBUG", f"Removed {arg} filter: {next_arg[:50]}...")
+                        continue
+
+                # Keep the flag and argument if no removal needed
+                new_args.append(arg)
+                if i + 1 < len(ffmpeg_args):
+                    i += 1
+                    new_args.append(ffmpeg_args[i])
+            else:
+                new_args.append(arg)
+
+            i += 1
+
+        return new_args
 
     def _update_command_preview(self) -> None:
         if not self.ffmpeg_translator:
@@ -868,6 +1048,53 @@ class FFmpegTab(QWidget):
                     continue
                 file_data["audio_track"] = effective_audio
                 file_data["subtitle_track"] = subtitle_track
+
+                # Extract subtitle language from tracks if subtitle was found
+                if subtitle_track is not None and "streams" in tracks:
+                    for stream in tracks.get("streams", []):
+                        if stream.get("index") == subtitle_track:
+                            lang = stream.get("language", "en")
+                            # Map full language names to ISO codes if needed
+                            lang_map = {"english": "en", "japanese": "ja", "spanish": "es", "french": "fr", "german": "de"}
+                            lang_code = lang_map.get(lang.lower(), lang.lower()[:2] if len(lang) >= 2 else "en")
+                            file_data["subtitle_language"] = lang_code
+                            break
+
+            # Detect and apply subtitle policy (unless Custom Override is enabled)
+            if self.custom_command_override_cb.isChecked():
+                # Skip subtitle handling with custom override
+                subtitle_decision = None
+                file_data["subtitle_strategy"] = "Custom Override - disabled"
+            else:
+                subtitle_settings = {
+                    "subtitle_handling": config.get_subtitle_handling(),
+                    "warn_on_ass_mux": config.get_warn_on_ass_mux(),
+                    "warn_on_burn": config.get_warn_on_burn()
+                }
+                subtitle_decision = process_file_subtitles(
+                    source_file,
+                    subtitle_settings,
+                    ffmpeg_path,
+                    ffprobe_path=None,  # Uses "ffprobe" from PATH by default
+                    log_callback=lambda lev, msg: self._on_log(lev, msg)
+                )
+                file_data["subtitle_strategy"] = subtitle_decision.reason
+
+            # Handle skip_file decision
+            if subtitle_decision.action == "skip_file":
+                file_data["status"] = "Skipped"
+                if self.batch_stats:
+                    self.batch_stats.add_file_result(
+                        filename=source_file.name,
+                        elapsed=0,
+                        input_size=0,
+                        output_size=0,
+                        success=False,
+                        skipped=True,
+                    )
+                skipped_count += 1
+                continue
+
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             output_dir = (
@@ -893,6 +1120,45 @@ class FFmpegTab(QWidget):
             file_data["status"] = "Encoding"
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
+
+            # Extract text-based subtitles to external files if policy requires it
+            # (skip if Custom Override is enabled)
+            extracted_subtitle_file = None
+            if (not self.custom_command_override_cb.isChecked() and
+                subtitle_decision and
+                subtitle_decision.action == "external" and
+                subtitle_decision.codec and
+                subtitle_decision.stream_index is not None and
+                not dry_run):
+                # Only extract text-based subtitles (skip bitmap codecs like pgssub)
+                if subtitle_decision.codec in TEXT_SUBTITLE_CODECS:
+                    # Determine output extension based on codec
+                    if subtitle_decision.codec in {"ass", "ssa"}:
+                        sub_ext = ".ass"
+                    else:
+                        sub_ext = ".srt"
+
+                    # Get language code and tag for Jellyfin-compatible naming
+                    # Format: filename.tag.language.ext (e.g., episode.default.ja.ass)
+                    lang_code = file_data.get("subtitle_language", "en")  # Default to 'en' if not detected
+                    sub_tag = config.get_external_subtitle_tag()  # 'default' or 'forced'
+
+                    # Build filename with tag and language following Jellyfin convention
+                    external_sub_path = output_dir / f"{source_file.stem}{suffix}.{sub_tag}.{lang_code}{sub_ext}"
+
+                    extracted_file, extraction_err = extract_text_subtitle_to_file(
+                        ffmpeg_path=ffmpeg_path,
+                        input_file=source_file,
+                        subtitle_codec=subtitle_decision.codec,
+                        subtitle_stream_id=subtitle_decision.stream_index,
+                        output_file=external_sub_path
+                    )
+                    if extracted_file:
+                        extracted_subtitle_file = extracted_file
+                        self._on_log("INFO", f"Extracted {subtitle_decision.codec} subtitle ({lang_code}) to {extracted_file.name}")
+                    elif extraction_err:
+                        self._on_log("WARNING", f"Could not extract subtitle: {extraction_err}")
+
             subtitle_file = None
             if subtitle_track is not None and not dry_run:
                 subtitle_file, err = extract_subtitle_stream(
@@ -922,6 +1188,15 @@ class FFmpegTab(QWidget):
                     file_data["status"] = "Error"
                     error_count += 1
                     continue
+
+                # Apply app settings optimizations unless Custom Override is enabled
+                if not self.custom_command_override_cb.isChecked():
+                    # Remove subtitle filters that conflict with our subtitle policy decision
+                    # Work directly with ffmpeg_args list to avoid quote escaping issues
+                    ffmpeg_args = self._remove_conflicting_subtitle_filters_from_args(ffmpeg_args, subtitle_decision)
+                    self._on_log("INFO", f"Applied app settings optimizations to command")
+                else:
+                    self._on_log("INFO", f"Custom Command Override enabled - using command as-is")
             except Exception as e:
                 self._on_log("ERROR", str(e))
                 file_data["status"] = "Error"
