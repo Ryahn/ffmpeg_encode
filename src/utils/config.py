@@ -108,7 +108,10 @@ class Config:
                     "crf": 32,
                     "preset": "faster"
                 }
-            }
+            },
+            "stats_api_enabled": True,
+            "stats_api_base_url": "https://ffmpeg-encode.com",
+            "stats_api_app_key": "",
         }
 
     def _ensure_defaults(self):
@@ -673,6 +676,27 @@ class Config:
             preset_name = self.get_encoder_quality_preset()
         config = self.get_quality_preset_config(preset_name)
         return config.get("preset", "medium")
+
+    def get_stats_api_enabled(self) -> bool:
+        return bool(self.config.get("stats_api_enabled", True))
+
+    def set_stats_api_enabled(self, value: bool) -> None:
+        self.config["stats_api_enabled"] = bool(value)
+        self._schedule_save()
+
+    def get_stats_api_base_url(self) -> str:
+        return str(self.config.get("stats_api_base_url") or "https://ffmpeg-encode.com").strip()
+
+    def set_stats_api_base_url(self, url: str) -> None:
+        self.config["stats_api_base_url"] = (url or "").strip()
+        self._schedule_save()
+
+    def get_stats_api_app_key(self) -> str:
+        return str(self.config.get("stats_api_app_key") or "")
+
+    def set_stats_api_app_key(self, key: str) -> None:
+        self.config["stats_api_app_key"] = (key or "").strip()
+        self._schedule_save()
 
 
 # Global config instance

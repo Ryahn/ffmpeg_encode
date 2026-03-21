@@ -44,6 +44,7 @@ class FFmpegTranslator:
         subtitle_track: Optional[int] = None,
         subtitle_file: Optional[Path] = None,
         audio_filter: Optional[str] = None,
+        audio_ffmpeg_stream_index: Optional[int] = None,
     ) -> List[str]:
         """Build FFmpeg command from preset"""
         if audio_track < 1:
@@ -58,10 +59,13 @@ class FFmpegTranslator:
         # Map video stream
         cmd.extend(["-map", "0:v:0"])
         
-        # Map audio stream (audio_track is 1-indexed mkvmerge track ID)
-        # Convert to 0-indexed FFmpeg stream ID and use absolute stream mapping
-        # This matches the PowerShell script behavior: -map 0:$AudioStreamID
-        audio_stream_id = audio_track - 1
+        # Map audio: use Matroska stream id when known, else heuristic (ordinal vs legacy mkv id+1).
+        if audio_ffmpeg_stream_index is not None:
+            audio_stream_id = audio_ffmpeg_stream_index
+        elif audio_track > 1:
+            audio_stream_id = audio_track - 1
+        else:
+            audio_stream_id = 1
         cmd.extend(["-map", f"0:{audio_stream_id}"])
         
         # Video codec settings
@@ -182,6 +186,7 @@ class FFmpegTranslator:
         subtitle_track: Optional[int] = None,
         subtitle_file: Optional[Path] = None,
         audio_filter: Optional[str] = None,
+        audio_ffmpeg_stream_index: Optional[int] = None,
     ) -> str:
         """Get FFmpeg command as a string"""
         cmd = self.build_command(
@@ -191,6 +196,7 @@ class FFmpegTranslator:
             subtitle_track,
             subtitle_file,
             audio_filter=audio_filter,
+            audio_ffmpeg_stream_index=audio_ffmpeg_stream_index,
         )
         return " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
     

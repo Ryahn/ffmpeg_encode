@@ -36,6 +36,15 @@ _PREVIEW_KNOWN_TOKENS = frozenset(
 
 _UNKNOWN_PLACEHOLDER_RE = re.compile(r"(\{[A-Z][A-Z0-9_]*\}|<[A-Z][A-Z0-9_]*>)")
 
+
+def _global_map_stream_index(audio_track: int, audio_ffmpeg_stream_index: Optional[int]) -> int:
+    """0-based FFmpeg stream index for -map 0:N after -map 0:v:0 (Matroska id when known)."""
+    if audio_ffmpeg_stream_index is not None:
+        return audio_ffmpeg_stream_index
+    if audio_track > 1:
+        return audio_track - 1
+    return 1
+
 # Characters that require a path to be double-quoted when embedded in a
 # command string that will later be parsed by shlex.split().
 _PATH_QUOTE_CHARS = frozenset(' &^%!')
@@ -147,7 +156,8 @@ def generate_command_preview(
     # so the preview renders quickly.  Users can run "Load tracks" to populate
     # real track data, after which the preview will reflect the actual values.
     if audio_track is None:
-        audio_track = 2
+        audio_track = 1
+    stream_idx = first_file_data.get("audio_ffmpeg_stream_index")
     subtitle_file = None
     if subtitle_track is not None:
         subtitle_file = Path(tempfile.gettempdir()) / f"{source_file.stem}_subtitle.mkv"
@@ -173,9 +183,34 @@ def generate_command_preview(
     command = re.sub(r"\boutput\.mp4\b", lambda m: output_file_quoted, command, flags=re.IGNORECASE)
     command = re.sub(r"\{OUTPUT\}", lambda m: output_file_quoted, command)
     command = re.sub(r"<OUTPUT>", lambda m: output_file_quoted, command)
+    audio_0based_for_a = max(0, audio_track - 1)
+    command = re.sub(
+        r"0:a:\s*\{AUDIO_TRACK\}",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
+    command = re.sub(
+        r"0:a:\s*<AUDIO_TRACK>",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
+    command = re.sub(
+        r"0:a:\s*\d+\\\{AUDIO_TRACK\}",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
+    command = re.sub(
+        r"0:a:\s*\d+\\<AUDIO_TRACK>",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
     command = re.sub(r"\{AUDIO_TRACK\}", str(audio_track), command)
     command = re.sub(r"<AUDIO_TRACK>", str(audio_track), command)
-    audio_stream_id = audio_track - 1
+    audio_stream_id = _global_map_stream_index(audio_track, stream_idx)
     command = re.sub(
         r"(-map\s+0:v:0\s+)-map\s+0:\d+",
         rf"\1-map 0:{audio_stream_id}",
@@ -209,6 +244,7 @@ def parse_and_substitute_command(
     subtitle_track: Optional[int],
     subtitle_file: Optional[Path],
     on_log: Callable[[str, str], None],
+    audio_ffmpeg_stream_index: Optional[int] = None,
 ) -> List[str]:
     command = command_template
     command = re.sub(r"(scale=[^,\s'\"]+):si=\d+", r"\1", command)
@@ -235,9 +271,34 @@ def parse_and_substitute_command(
     command = re.sub(r"\boutput\.mp4\b", output_file_escaped, command, flags=re.IGNORECASE)
     command = re.sub(r"\{OUTPUT\}", output_file_escaped, command)
     command = re.sub(r"<OUTPUT>", output_file_escaped, command)
+    audio_0based_for_a = max(0, audio_track - 1)
+    command = re.sub(
+        r"0:a:\s*\{AUDIO_TRACK\}",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
+    command = re.sub(
+        r"0:a:\s*<AUDIO_TRACK>",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
+    command = re.sub(
+        r"0:a:\s*\d+\\\{AUDIO_TRACK\}",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
+    command = re.sub(
+        r"0:a:\s*\d+\\<AUDIO_TRACK>",
+        f"0:a:{audio_0based_for_a}",
+        command,
+        flags=re.IGNORECASE,
+    )
     command = re.sub(r"\{AUDIO_TRACK\}", str(audio_track), command)
     command = re.sub(r"<AUDIO_TRACK>", str(audio_track), command)
-    audio_stream_id = audio_track - 1
+    audio_stream_id = _global_map_stream_index(audio_track, audio_ffmpeg_stream_index)
     command = re.sub(
         r"(-map\s+0:v:0\s+)-map\s+0:\d+",
         rf"\1-map 0:{audio_stream_id}",

@@ -943,7 +943,7 @@ def extract_text_subtitle_to_file(
         ffmpeg_path: Path to ffmpeg executable
         input_file: Source video file
         subtitle_codec: Codec name (subrip, ass, ssa, webvtt, etc.)
-        subtitle_stream_id: Stream index in input file
+        subtitle_stream_id: Global FFmpeg stream index (as in ffprobe ``stream.index`` / ``Stream #0:N``)
         output_file: Output file path (should be .srt or .ass based on codec)
 
     Returns:
@@ -985,7 +985,7 @@ def extract_text_subtitle_to_file(
         args = [
             ffmpeg_path,
             "-i", str(input_file),
-            "-map", f"0:s:{subtitle_stream_id}",
+            "-map", f"0:{subtitle_stream_id}",
             "-c:s", "copy",
             "-y",
             str(output_file),

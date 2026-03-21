@@ -280,6 +280,7 @@ class FileListWidget(QWidget):
             "size": file_size,
             "size_str": size_str,
             "audio_track": None,
+            "audio_ffmpeg_stream_index": None,
             "subtitle_track": None,
             "status": self.STATUS_PENDING,
             "output_path": None,

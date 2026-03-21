@@ -47,6 +47,7 @@ a = Analysis(
         'core.notifications',
         'core.package_manager',
         'core.preset_parser',
+        'core.stats_api_client',
         'core.subprocess_utils',
         'core.track_analyzer',
         'core.track_selection',

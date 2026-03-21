@@ -6,6 +6,21 @@ from utils.config import config
 from core.track_analyzer import TrackAnalyzer
 
 
+def audio_mkv_stream_id_for_ordinal(tracks: dict, ordinal_1based: int) -> Optional[int]:
+    """FFmpeg/Matroska 0-based stream index for the Nth audio stream (ordinal_1based is 1, 2, …)."""
+    audios = sorted(
+        (
+            t
+            for t in (tracks.get("all_tracks") or [])
+            if t.get("type") == "audio" and t.get("id") is not None
+        ),
+        key=lambda t: t["id"],
+    )
+    if 1 <= ordinal_1based <= len(audios):
+        return audios[ordinal_1based - 1]["id"]
+    return None
+
+
 def compute_effective_tracks(
     tracks: dict,
     track_analyzer: TrackAnalyzer,
@@ -17,8 +32,8 @@ def compute_effective_tracks(
     Signs & Songs subtitle, then first English sub when using first audio only.
 
     Returns:
-        (effective_audio, subtitle_track): audio is 1-based (HandBrake-style);
-        subtitle is 0-based stream id, or None.
+        (effective_audio, subtitle_track): audio is 1-based index among audio streams
+        (first audio = 1); subtitle is 0-based Matroska stream id, or None.
     """
     suffix = f" for: {source_label}" if source_label else ""
 

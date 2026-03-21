@@ -22,6 +22,14 @@ The Video Encoder GUI is a cross-platform application for encoding video files u
 
 3. **Load a Preset**: In either the **HandBrake** or **FFmpeg** tab, load a HandBrake preset JSON file to get started.
 
+### Community stats (optional)
+
+Under **Settings**, the **Community stats** section controls optional uploads to the stats API at [ffmpeg-encode.com](https://ffmpeg-encode.com). After each successful, non–dry-run encode, the app can POST aggregate totals only: number of successful encodes, sum of output file sizes (bytes), and sum of encode durations (seconds). No file names or paths are sent.
+
+- **Share encoding statistics**: Master toggle (default on). Uploads occur only when sharing is enabled **and** an app key is available.
+- **API base URL**: Use the site origin, e.g. `https://ffmpeg-encode.com`. If you enter a URL ending in `/api`, that suffix is stripped so paths are not doubled.
+- **App key**: The shared secret for `POST /api/auth/token`. Alternatively, set the environment variable **`FFMPEG_ENCODE_APP_KEY`**; when set, it overrides the saved app key and the key field in Settings is disabled.
+
 ## Files Tab
 
 The Files tab is where you manage the video files you want to encode.

@@ -52,7 +52,7 @@ from core.subtitle_policy import decide_subtitle_action
 from core.notifications import BatchNotification
 from core.preset_parser import PresetParser
 from core.track_analyzer import TrackAnalyzer
-from core.track_selection import compute_effective_tracks
+from core.track_selection import audio_mkv_stream_id_for_ordinal, compute_effective_tracks
 from storage import record_successful_encode
 from utils.config import config
 from utils.logger import logger
@@ -754,11 +754,16 @@ class FFmpegTab(QWidget):
         ph_in = Path("input.mkv")
         ph_out = Path("output.mp4")
         subtitle_track_preview = None
+        audio_preview = 1
+        stream_preview: Optional[int] = None
         if self.get_files_callback:
             files = self.get_files_callback()
             if files:
                 fd = files[0]
                 subtitle_track_preview = fd.get("subtitle_track")
+                if fd.get("audio_track") is not None:
+                    audio_preview = fd["audio_track"]
+                stream_preview = fd.get("audio_ffmpeg_stream_index")
                 if subtitle_track_preview is None and self.track_analyzer:
                     try:
                         tr = self.track_analyzer.analyze_tracks(Path(fd["path"]))
@@ -769,9 +774,11 @@ class FFmpegTab(QWidget):
         cmd = self.ffmpeg_translator.get_command_string(
             input_file=ph_in,
             output_file=ph_out,
-            audio_track=2,
+            audio_track=audio_preview,
             subtitle_track=subtitle_track_preview,
+            subtitle_file=None,
             audio_filter=self._audio_filter_from_settings(),
+            audio_ffmpeg_stream_index=stream_preview,
         )
         self.cmd_text.blockSignals(True)
         self.cmd_text.setPlainText(cmd)
@@ -832,6 +839,9 @@ class FFmpegTab(QWidget):
                 return
             files[0]["audio_track"] = audio_track
             files[0]["subtitle_track"] = subtitle_track
+            files[0]["audio_ffmpeg_stream_index"] = audio_mkv_stream_id_for_ordinal(
+                tracks, audio_track
+            )
             if self.update_file_callback:
                 self.update_file_callback(0, files[0])
             ph_in = Path("input.mkv")
@@ -842,6 +852,7 @@ class FFmpegTab(QWidget):
                 audio_track=audio_track,
                 subtitle_track=subtitle_track,
                 audio_filter=self._audio_filter_from_settings(),
+                audio_ffmpeg_stream_index=files[0].get("audio_ffmpeg_stream_index"),
             )
             self.cmd_text.setPlainText(cmd)
             self._update_command_preview_display()
@@ -1086,6 +1097,9 @@ class FFmpegTab(QWidget):
                     continue
                 file_data["audio_track"] = effective_audio
                 file_data["subtitle_track"] = subtitle_track
+                file_data["audio_ffmpeg_stream_index"] = audio_mkv_stream_id_for_ordinal(
+                    tracks, effective_audio
+                )
 
                 # Extract subtitle language from tracks if subtitle was found
                 if subtitle_track is not None and "streams" in tracks:
@@ -1119,7 +1133,7 @@ class FFmpegTab(QWidget):
                 file_data["subtitle_strategy"] = subtitle_decision.reason
 
             # Handle skip_file decision
-            if subtitle_decision.action == "skip_file":
+            if subtitle_decision is not None and subtitle_decision.action == "skip_file":
                 file_data["status"] = "Skipped"
                 if self.batch_stats:
                     self.batch_stats.add_file_result(
@@ -1221,6 +1235,7 @@ class FFmpegTab(QWidget):
                     subtitle_track,
                     subtitle_file,
                     lambda lev, msg: self._on_log(lev, msg),
+                    audio_ffmpeg_stream_index=file_data.get("audio_ffmpeg_stream_index"),
                 )
                 if not ffmpeg_args:
                     file_data["status"] = "Error"

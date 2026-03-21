@@ -32,7 +32,7 @@ from core.encoder import Encoder, EncodingProgress, format_cli_argv
 from core.notifications import BatchNotification
 from core.preset_parser import PresetParser
 from core.track_analyzer import TrackAnalyzer
-from core.track_selection import compute_effective_tracks
+from core.track_selection import audio_mkv_stream_id_for_ordinal, compute_effective_tracks
 from storage import record_successful_encode
 from utils.config import config
 from utils.logger import logger
@@ -433,6 +433,11 @@ class HandBrakeTab(QWidget):
                     continue
                 file_data["audio_track"] = effective_audio
                 file_data["subtitle_track"] = subtitle_track
+                file_data["audio_ffmpeg_stream_index"] = audio_mkv_stream_id_for_ordinal(
+                    tracks, effective_audio
+                )
+            stream_idx = file_data.get("audio_ffmpeg_stream_index")
+            hb_audio = stream_idx + 1 if stream_idx is not None else effective_audio
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             if self.get_output_path_callback:
@@ -463,7 +468,7 @@ class HandBrakeTab(QWidget):
                 output_file=output_file,
                 preset_file=self.preset_path,
                 preset_name=self.preset_parser.get_preset_name(),
-                audio_track=effective_audio,
+                audio_track=hb_audio,
                 subtitle_track=subtitle_track,
                 dry_run=dry_run,
             )

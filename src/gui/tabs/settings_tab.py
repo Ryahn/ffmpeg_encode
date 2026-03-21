@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import Any, List
@@ -49,6 +50,7 @@ class SettingsTab(QWidget):
         root.addWidget(self._encoding_group())
         root.addWidget(self._subtitle_group())
         root.addWidget(self._track_group())
+        root.addWidget(self._community_stats_group())
         root.addStretch()
 
         lay = QVBoxLayout(self)
@@ -491,6 +493,46 @@ class SettingsTab(QWidget):
         f.addRow("Subtitle exclude patterns:", self.sub_ex)
         return g
 
+    def _community_stats_group(self) -> QGroupBox:
+        g = QGroupBox("Community stats")
+        v = QVBoxLayout(g)
+        note = QLabel(
+            "Optional: send aggregate totals after each successful encode (count of encodes, "
+            "total output bytes, total encode seconds) to ffmpeg-encode.com. "
+            "No file names or paths are sent."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #888888; font-size: 12px;")
+        v.addWidget(note)
+        self.stats_api_enabled_cb = QCheckBox("Share encoding statistics")
+        self.stats_api_enabled_cb.setChecked(config.get_stats_api_enabled())
+        self.stats_api_enabled_cb.toggled.connect(lambda x: config.set_stats_api_enabled(x))
+        v.addWidget(self.stats_api_enabled_cb)
+        form = QFormLayout()
+        self.stats_api_base_url_entry = QLineEdit(config.get_stats_api_base_url())
+        self.stats_api_base_url_entry.setPlaceholderText("https://ffmpeg-encode.com")
+        self.stats_api_base_url_entry.editingFinished.connect(
+            lambda: config.set_stats_api_base_url(self.stats_api_base_url_entry.text().strip())
+        )
+        form.addRow("API base URL:", self.stats_api_base_url_entry)
+        self.stats_api_key_entry = QLineEdit(config.get_stats_api_app_key())
+        self.stats_api_key_entry.setEchoMode(QLineEdit.EchoMode.Password)
+        self.stats_api_key_entry.setPlaceholderText("App key from server operator")
+        self.stats_api_key_entry.editingFinished.connect(
+            lambda: config.set_stats_api_app_key(self.stats_api_key_entry.text().strip())
+        )
+        form.addRow("App key:", self.stats_api_key_entry)
+        v.addLayout(form)
+        if os.environ.get("FFMPEG_ENCODE_APP_KEY", "").strip():
+            env_lbl = QLabel(
+                "<i>FFMPEG_ENCODE_APP_KEY is set in the environment; it overrides the app key above.</i>"
+            )
+            env_lbl.setWordWrap(True)
+            v.addWidget(env_lbl)
+            self.stats_api_key_entry.setEnabled(False)
+            self.stats_api_key_entry.setPlaceholderText("Using environment variable")
+        return g
+
     def _save_audio_lang(self, t: str) -> None:
         config.set_audio_language_tags([x.strip() for x in t.split(",") if x.strip()])
 
@@ -525,6 +567,10 @@ class SettingsTab(QWidget):
             config.set_audio_normalize_loudnorm_I(self.loudnorm_I.value())
             config.set_audio_normalize_loudnorm_TP(self.loudnorm_TP.value())
             config.set_audio_normalize_loudnorm_LRA(self.loudnorm_LRA.value())
+            config.set_stats_api_enabled(self.stats_api_enabled_cb.isChecked())
+            config.set_stats_api_base_url(self.stats_api_base_url_entry.text().strip())
+            if self.stats_api_key_entry.isEnabled():
+                config.set_stats_api_app_key(self.stats_api_key_entry.text().strip())
             mw = self.main_window
             if mw is not None and hasattr(mw, "refresh_encoder_clients"):
                 mw.refresh_encoder_clients()

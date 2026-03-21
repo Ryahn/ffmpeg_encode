@@ -201,23 +201,22 @@ class TrackAnalyzer:
         if current_track is not None:
             tracks.append(current_track)
 
-        # Process tracks to find English audio and Signs & Songs subtitle
-        # Use mkvmerge track ID directly (matches FFmpeg stream index in MKV files)
-        # Audio: 1-based for HandBrake CLI. Also record first audio track for "Japanese + English subs" mode.
+        # Process tracks to find English audio and Signs & Songs subtitle.
+        # Audio selection uses 1-based index among audio streams only (first audio = 1) so it
+        # matches FFmpeg -map 0:a:N (N = ordinal - 1). Matroska stream ids stay in all_tracks for
+        # global -map 0:<id> and HandBrake (stream id + 1).
         sorted_tracks = sorted(tracks, key=lambda t: t["id"])
-        first_audio_track = None
-        for track in sorted_tracks:
-            if track.get("type") != "audio":
-                continue
-            tid = track.get("id")
-            if tid is None:
-                continue
-            if first_audio_track is None:
-                first_audio_track = tid + 1
+        audio_only = [
+            t
+            for t in sorted_tracks
+            if t.get("type") == "audio" and t.get("id") is not None
+        ]
+        first_audio_track = 1 if audio_only else None
+        for ord_1based, track in enumerate(audio_only, start=1):
             if audio_track is None:
                 is_english = self._is_english_track(track.get("language"), track.get("name"))
                 if is_english:
-                    audio_track = tid + 1
+                    audio_track = ord_1based
                     break
 
         # Subtitle: explicitly pick the first (by id) English subtitle that matches Signs & Songs.

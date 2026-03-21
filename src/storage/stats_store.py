@@ -104,6 +104,12 @@ def record_successful_encode(output_bytes: int, elapsed_seconds: float) -> None:
             row.total_encode_seconds += es
             row.updated_at = datetime.now(timezone.utc)
             session.commit()
+    try:
+        from core.stats_api_client import schedule_sync_lifetime_stats_if_enabled
+
+        schedule_sync_lifetime_stats_if_enabled()
+    except Exception:
+        pass
 
 
 def get_lifetime_totals() -> LifetimeTotals:

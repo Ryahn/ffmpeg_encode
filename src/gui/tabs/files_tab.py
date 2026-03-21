@@ -27,7 +27,7 @@ from ..dialogs.set_tracks_dialog import show_set_tracks_dialog
 from ..widgets.file_list import FileListWidget
 from core.file_scanner import FileScanner
 from core.track_analyzer import TrackAnalyzer
-from core.track_selection import compute_effective_tracks
+from core.track_selection import audio_mkv_stream_id_for_ordinal, compute_effective_tracks
 from utils.config import config
 
 logger = logging.getLogger(__name__)
@@ -74,12 +74,18 @@ class _LoadTracksWorker(QObject):
                 failed.append(source_file.name)
                 continue
             effective_audio, subtitle_track = compute_effective_tracks(tracks, self._analyzer)
+            stream_id = (
+                audio_mkv_stream_id_for_ordinal(tracks, effective_audio)
+                if effective_audio is not None
+                else None
+            )
             if effective_audio is not None:
                 results.append(
                     {
                         "idx": idx,
                         "audio": effective_audio,
                         "subtitle": subtitle_track,
+                        "audio_ffmpeg_stream_index": stream_id,
                         "no_audio_name": None,
                     }
                 )
@@ -89,6 +95,7 @@ class _LoadTracksWorker(QObject):
                         "idx": idx,
                         "audio": None,
                         "subtitle": None,
+                        "audio_ffmpeg_stream_index": None,
                         "no_audio_name": source_file.name,
                     }
                 )
@@ -513,6 +520,7 @@ class FilesTab(QWidget):
                 r["idx"],
                 audio_track=r["audio"],
                 subtitle_track=r["subtitle"],
+                audio_ffmpeg_stream_index=r.get("audio_ffmpeg_stream_index"),
                 tracks_from_user=False,
             )
         self._load_tracks_busy = False
@@ -595,12 +603,11 @@ class FilesTab(QWidget):
             [t for t in all_tracks if t.get("type") == "subtitles"], key=lambda t: t["id"]
         )
 
-        def audio_label(t):
-            n = t["id"] + 1
+        def audio_label(t, ord_1based: int):
             lang = t.get("language") or "?"
             name = (t.get("name") or "").strip()
             extra = f" — {name}" if name else ""
-            return f"Audio track {n} ({lang}){extra}", n
+            return f"Audio track {ord_1based} ({lang}){extra}", ord_1based
 
         def sub_label(t):
             lang = t.get("language") or "?"
@@ -611,7 +618,9 @@ class FilesTab(QWidget):
                 t["id"],
             )
 
-        audio_options = [("None (no audio track)", None)] + [audio_label(t) for t in audio_tracks]
+        audio_options = [("None (no audio track)", None)] + [
+            audio_label(t, i + 1) for i, t in enumerate(audio_tracks)
+        ]
         subtitle_options = [("None (no burned subtitles)", None)] + [sub_label(t) for t in sub_tracks]
         picked = show_set_tracks_dialog(self, audio_options, subtitle_options, len(indices))
         if picked is None:
@@ -626,11 +635,15 @@ class FilesTab(QWidget):
             )
             if r != QMessageBox.StandardButton.Yes:
                 return
+        mkv_stream: Optional[int] = None
+        if audio_track is not None and 1 <= audio_track <= len(audio_tracks):
+            mkv_stream = audio_tracks[audio_track - 1]["id"]
         for idx in indices:
             self.file_list.update_file(
                 idx,
                 audio_track=audio_track,
                 subtitle_track=subtitle_track,
+                audio_ffmpeg_stream_index=mkv_stream,
                 tracks_from_user=True,
             )
         if self.on_files_changed:
