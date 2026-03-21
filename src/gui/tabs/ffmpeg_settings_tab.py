@@ -461,10 +461,10 @@ class FFmpegSettingsTab(QWidget):
                 bitrate = self.audio_bitrate_spinbox.value()
                 audio_codec_option = f"-c:a {fallback} -b:a {bitrate}k"
 
-            # Build command parts (use {INPUT} and {OUTPUT} placeholders)
+            # Build command parts (use {INPUT}, {OUTPUT}, {AUDIO_TRACK} placeholders)
             cmd_parts = [
                 'ffmpeg -i {INPUT}',
-                "-map 0:v:0 -map 0:a:0",
+                "-map 0:v:0 -map 0:a:{AUDIO_TRACK}",
                 f"-c:v {codec}",
                 f"-cq {crf}",
                 f"-preset {speed}",
