@@ -272,27 +272,17 @@ def parse_and_substitute_command(
             + ", ".join(dict.fromkeys(_remaining)),
         )
 
+    # Validate input/output files exist before parsing command
+    # (use original unescaped paths, not the FFmpeg-escaped versions)
+    if not input_file.exists():
+        on_log("ERROR", f"Input file does not exist: {input_file}")
+        return []
+
     try:
         args = shlex.split(command, posix=False)
     except Exception as e:
         on_log("ERROR", f"Command parsing failed ({e}); cannot build argument list.")
         return []
-
-    for i, arg in enumerate(args):
-        if arg == "-i" and i + 1 < len(args):
-            # shlex.split() already handles quote parsing, so paths are clean
-            input_path = args[i + 1]
-            if not Path(input_path).exists():
-                on_log("ERROR", f"Input file does not exist: {input_path}")
-            # args[i + 1] is already correct, no modification needed
-        elif arg == "-y" and i + 1 < len(args):
-            # Output path is already correct from shlex.split()
-            pass
-        elif i == len(args) - 1 and (
-            arg.endswith(".mp4") or arg.endswith(".mkv") or arg.endswith(".avi")
-        ):
-            # Final output path is already correct from shlex.split()
-            pass
 
     if not args:
         return []
