@@ -147,16 +147,10 @@ def generate_command_preview(
     command = command_template
 
     def quote_path_if_needed(path_str: str) -> str:
-        # Paths with spaces or special chars must be quoted.
-        # Within quotes, brackets don't need escaping (quotes protect them).
-        # Only escape brackets if the path won't be quoted.
+        # Quote paths with spaces or special characters
         if any(c in path_str for c in _PATH_QUOTE_CHARS):
-            # Path will be quoted, so brackets are safe inside quotes
             return f'"{path_str}"'
-        else:
-            # Path won't be quoted, so escape brackets for FFmpeg
-            path_str = path_str.replace('[', r'\[').replace(']', r'\]')
-            return path_str
+        return path_str
 
     input_file_str = str(source_file)
     output_file_str = str(output_file)
@@ -216,16 +210,10 @@ def parse_and_substitute_command(
         return path_str.replace("\\", "\\\\")
 
     def quote_path_if_needed(path_str: str) -> str:
-        # Paths with spaces or special chars must be quoted.
-        # Within quotes, brackets don't need escaping (quotes protect them).
-        # Only escape brackets if the path won't be quoted.
+        # Quote paths with spaces or special characters
         if any(c in path_str for c in _PATH_QUOTE_CHARS):
-            # Path will be quoted, so brackets are safe inside quotes
             return f'"{path_str}"'
-        else:
-            # Path won't be quoted, so escape brackets for FFmpeg
-            path_str = path_str.replace('[', r'\[').replace(']', r'\]')
-            return path_str
+        return path_str
 
     input_file_str = str(input_file)
     output_file_str = str(output_file)
