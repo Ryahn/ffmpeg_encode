@@ -49,19 +49,21 @@ def test_bracket_escape():
             print(f"  [{i:2d}] {display}")
         print()
 
-        # Check that files with brackets work correctly
-        command_str = ' '.join(args)
+        # List argv must use real paths (no literal shell quote characters); those
+        # are only used inside the template string before shlex.split.
+        paths_ok = (
+            args[2] == str(input_file)
+            and args[-1] == str(output_file)
+            and not args[2].startswith('"')
+            and "[Judas] Test" in args[2]
+        )
 
-        # The path should be quoted (because it's in a temp directory with spaces)
-        # and the filename with brackets should be intact
-        has_quoted_bracket_path = '"' in command_str and '[Judas] Test' in command_str
-
-        if has_quoted_bracket_path:
-            print("[OK] Files with brackets work (quoted path preserves brackets)")
+        if paths_ok:
+            print("[OK] Bracket paths preserved in argv after shlex (no stray quotes)")
             return True
         else:
             print("[FAIL] Bracket path handling is incorrect")
-            print(f"Command: {command_str}")
+            print(f"args[2]={args[2]!r}")
             return False
 
 if __name__ == '__main__':

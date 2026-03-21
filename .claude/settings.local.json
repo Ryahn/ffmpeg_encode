@@ -39,7 +39,8 @@
       "Bash(python -m pytest ../tests/test_subtitle_handling.py -v)",
       "Bash(python ../tests/test_subtitle_handling.py)",
       "Bash(python tests/test_subtitle_handling.py)",
-      "Bash(grep -r AppleTV src/ --include=*.py)"
+      "Bash(grep -r AppleTV src/ --include=*.py)",
+      "Bash(find . -name version* -o -name *version* -type f)"
     ]
   }
 }

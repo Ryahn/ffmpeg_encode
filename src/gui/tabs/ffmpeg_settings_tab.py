@@ -431,8 +431,12 @@ class FFmpegSettingsTab(QWidget):
             else:
                 # Smart resolution: keep source res if < 1080p, otherwise use 1080p
                 if src_height <= 1080:
-                    # Don't upscale - keep source resolution
-                    scale_filter = f"scale=min(1920,{src_width}):min(1080,{src_height}):force_original_aspect_ratio=decrease"
+                    # Don't upscale - keep source resolution. Commas inside min() must be
+                    # escaped (\,) or FFmpeg treats them as filter-chain separators.
+                    scale_filter = (
+                        f"scale=min(1920\\,{src_width}):min(1080\\,{src_height})"
+                        f":force_original_aspect_ratio=decrease"
+                    )
                     target_width, target_height = src_width, src_height
                 else:
                     # Source is > 1080p, downscale to 1080p

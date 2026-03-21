@@ -11,7 +11,7 @@ import re
 import shlex
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from PyQt6.QtCore import QObject, QThread, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication
@@ -398,6 +398,43 @@ class FFmpegTab(QWidget):
             return f"{quote_char}{af_value_unquoted}{quote_char}"
         return af_value_unquoted
 
+    def _loudnorm_fallback_audio_codec_and_bitrate(self) -> Tuple[str, int]:
+        st = getattr(self.main_window, "ffmpeg_settings_tab", None)
+        if st is not None:
+            codec = st.audio_codec_combo.currentData() or "aac"
+            return codec, int(st.audio_bitrate_spinbox.value())
+        return "aac", 192
+
+    def _upgrade_cmd_string_c_a_copy_for_loudnorm(self, cmd: str) -> str:
+        codec, br = self._loudnorm_fallback_audio_codec_and_bitrate()
+        repl = f"-c:a {codec} -b:a {br}k"
+        cmd = re.sub(r"-c:a\s+copy\b", repl, cmd)
+        return re.sub(r"-codec:a\s+copy\b", repl, cmd)
+
+    def _ensure_audio_encode_when_loudnorm_argv(self, args: List[str]) -> List[str]:
+        """loudnorm requires decoded audio; -c:a copy is invalid with -af loudnorm."""
+        has_loudnorm = False
+        for i, a in enumerate(args):
+            if a == "-af" and i + 1 < len(args) and "loudnorm=" in args[i + 1]:
+                has_loudnorm = True
+                break
+        if not has_loudnorm:
+            return args
+        codec, br = self._loudnorm_fallback_audio_codec_and_bitrate()
+        out = list(args)
+        for i in range(len(out) - 1):
+            if out[i] in ("-c:a", "-codec:a") and out[i + 1] == "copy":
+                out[i + 1] = codec
+                out.insert(i + 2, "-b:a")
+                out.insert(i + 3, f"{br}k")
+                logger.info(
+                    "loudnorm: replaced -c:a copy with -c:a %s -b:a %sk (copy is incompatible with -af)",
+                    codec,
+                    br,
+                )
+                return out
+        return out
+
     def _apply_loudnorm_to_current_cmd_text(self) -> None:
         """
         Update only the -af option in the current command template.
@@ -455,6 +492,7 @@ class FFmpegTab(QWidget):
                     new_cmd = cmd[:insert_at] + insert_str + cmd[insert_at:]
                 else:
                     new_cmd = cmd + insert_str
+            new_cmd = self._upgrade_cmd_string_c_a_copy_for_loudnorm(new_cmd)
         else:
             # Disable loudnorm: remove loudnorm entries from -af, but keep other filters.
             if not self._AF_OPTION_RE.search(cmd):
@@ -1194,6 +1232,7 @@ class FFmpegTab(QWidget):
                     # Remove subtitle filters that conflict with our subtitle policy decision
                     # Work directly with ffmpeg_args list to avoid quote escaping issues
                     ffmpeg_args = self._remove_conflicting_subtitle_filters_from_args(ffmpeg_args, subtitle_decision)
+                    ffmpeg_args = self._ensure_audio_encode_when_loudnorm_argv(ffmpeg_args)
                     self._on_log("INFO", f"Applied app settings optimizations to command")
                 else:
                     self._on_log("INFO", f"Custom Command Override enabled - using command as-is")

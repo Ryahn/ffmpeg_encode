@@ -41,6 +41,13 @@ _UNKNOWN_PLACEHOLDER_RE = re.compile(r"(\{[A-Z][A-Z0-9_]*\}|<[A-Z][A-Z0-9_]*>)")
 _PATH_QUOTE_CHARS = frozenset(' &^%!')
 
 
+def _strip_windows_shlex_outer_quotes(token: str) -> str:
+    """shlex.split(..., posix=False) on Windows leaves literal \" as the first and last character of a token when the source command used quotes for paths containing spaces. Those characters must not be passed to FFmpeg as part of the path."""
+    if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+        return token[1:-1]
+    return token
+
+
 def _escape_gap_with_placeholder_marks(gap_plain: str) -> str:
     """HTML-escape a gap between primary tokens; badge unknown {FOO}/<FOO> placeholders."""
     if not gap_plain:
@@ -282,6 +289,8 @@ def parse_and_substitute_command(
         on_log("ERROR", f"Command parsing failed ({e}); cannot build argument list.")
         return []
 
+    args = [_strip_windows_shlex_outer_quotes(a) for a in args]
+
     if not args:
         return []
 
@@ -297,4 +306,5 @@ def parse_and_substitute_command(
             "configured in Settings (first argument was not recognized as FFmpeg)."
         )
     args[0] = ffmpeg_executable
+
     return args
