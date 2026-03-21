@@ -231,7 +231,7 @@ class TrackAnalyzer:
                 if stid is not None:
                     subtitle_track = stid
                 break
-        
+
         result = {
             "audio": audio_track,
             "first_audio": first_audio_track,
@@ -285,7 +285,9 @@ class TrackAnalyzer:
         for compiled in self._compiled_regexes(patterns):
             if compiled.search(name):
                 return True
-
+        # Common release naming (e.g. English[Signs]) does not match legacy patterns like Signs$.
+        if re.search(r"\[signs\]", name, re.I):
+            return True
         return False
     
     def _matches_english_subtitle_language(self, language: Optional[str]) -> bool:

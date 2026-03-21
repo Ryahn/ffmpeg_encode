@@ -373,7 +373,9 @@ class Encoder:
         ffmpeg_args: list,
         subtitle_file: Optional[Path] = None,
         subtitle_stream_index: Optional[int] = None,
-        dry_run: bool = False
+        *,
+        skip_bitmap_subtitle_overlay_rewrite: bool = False,
+        dry_run: bool = False,
     ) -> bool:
         """Encode using FFmpeg"""
         if dry_run:
@@ -392,7 +394,10 @@ class Encoder:
             else:
                 args.append(arg)
 
-        if subtitle_file is not None or subtitle_stream_index is not None:
+        if (
+            not skip_bitmap_subtitle_overlay_rewrite
+            and (subtitle_file is not None or subtitle_stream_index is not None)
+        ):
             rewritten = rewrite_ffmpeg_args_for_bitmap_subtitle_overlay(
                 args,
                 main_subtitle_stream_index=subtitle_stream_index,
@@ -414,8 +419,26 @@ class Encoder:
 
         self._log("INFO", f"Prepared FFmpeg command with {len(args)} arguments")
         return self._run_encoder(args, "FFmpeg", output_file)
+
+    def run_ffmpeg_argv(
+        self,
+        argv: List[str],
+        output_file: Optional[Path] = None,
+    ) -> bool:
+        """Run an FFmpeg argument vector (first element may be the literal token ``ffmpeg``)."""
+        if not argv:
+            self._log("ERROR", "FFmpeg argv is empty")
+            return False
+        args: List[str] = []
+        for arg in argv:
+            if arg == "ffmpeg":
+                args.append(self.ffmpeg_path)
+            else:
+                args.append(arg)
+        self._log("INFO", f"Prepared FFmpeg command with {len(args)} arguments")
+        return self._run_encoder(args, "FFmpeg", output_file)
     
-    def _run_encoder(self, args: list, encoder_name: str, output_file: Path) -> bool:
+    def _run_encoder(self, args: list, encoder_name: str, output_file: Optional[Path]) -> bool:
         """Run the encoder process"""
         try:
             # Reset duration for new encoding
@@ -549,6 +572,9 @@ class Encoder:
                 self._log("ERROR", f"{encoder_name} exited with code {process.returncode}")
                 return False
 
+            if output_file is None:
+                self._log("SUCCESS", f"{encoder_name} completed")
+                return True
             if self._wait_for_file(output_file):
                 self._log("SUCCESS", f"Encoding completed: {output_file.name}")
                 return True

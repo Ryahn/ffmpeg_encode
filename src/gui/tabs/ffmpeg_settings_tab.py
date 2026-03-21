@@ -305,22 +305,9 @@ class FFmpegSettingsTab(QWidget):
 
     def _get_ffprobe_info(self, file_path: Path) -> Dict[str, Any]:
         """Get detailed media info using ffprobe."""
-        ffprobe_path = config.get("ffmpeg_path", "")
+        from utils.ffmpeg_paths import resolve_ffprobe_path
 
-        # Try to find ffprobe in common locations
-        possible_ffprobe = [
-            Path(ffprobe_path).parent / "ffprobe.exe" if ffprobe_path else None,
-            Path(ffprobe_path).parent / "ffprobe" if ffprobe_path else None,
-            Path("ffprobe.exe"),
-            Path("ffprobe"),
-        ]
-
-        ffprobe = None
-        for path in possible_ffprobe:
-            if path and path.exists():
-                ffprobe = str(path)
-                break
-
+        ffprobe = resolve_ffprobe_path()
         if not ffprobe:
             return {}
 

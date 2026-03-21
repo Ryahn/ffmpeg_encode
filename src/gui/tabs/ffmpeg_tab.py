@@ -709,9 +709,10 @@ class FFmpegTab(QWidget):
               subtitle_decision.source.startswith("embedded") and
               subtitle_decision.codec and
               subtitle_decision.codec not in ("pgssub", "hdmv_pgs_subtitle")):
-            # Text subtitle - check if there's an overlay filter to remove
+            # Bitmap burn uses filter_complex + overlay; text burn uses subtitles= with {SUBTITLE_FILE}.
+            # Only strip overlay graphs here — never drop subtitles= or we remove the user's chosen ASS burn.
             for i, arg in enumerate(ffmpeg_args):
-                if 'overlay=' in arg or 'subtitles=' in arg:
+                if "overlay=" in arg:
                     needs_filter_removal = True
                     break
 
@@ -1198,11 +1199,17 @@ class FFmpegTab(QWidget):
                     # Build filename with tag and language following Jellyfin convention
                     external_sub_path = output_dir / f"{source_file.stem}{suffix}.{sub_tag}.{lang_code}{sub_ext}"
 
+                    # Policy uses ffprobe's first subtitle stream; file list may target another (e.g. Signs).
+                    external_stream_id = (
+                        subtitle_track
+                        if subtitle_track is not None
+                        else subtitle_decision.stream_index
+                    )
                     extracted_file, extraction_err = extract_text_subtitle_to_file(
                         ffmpeg_path=ffmpeg_path,
                         input_file=source_file,
                         subtitle_codec=subtitle_decision.codec,
-                        subtitle_stream_id=subtitle_decision.stream_index,
+                        subtitle_stream_id=external_stream_id,
                         output_file=external_sub_path
                     )
                     if extracted_file:
@@ -1258,6 +1265,12 @@ class FFmpegTab(QWidget):
                 continue
             self._progress_ui_throttle_last = None
             t0 = time.time()
+            # Text subs (ASS/SRT/…) must keep the libass ``subtitles=`` filter + sidecar; bitmap
+            # rewrite replaces it with overlay [0:N] which is for PGS and breaks ASS burn quality/track choice.
+            skip_bitmap_rewrite = (
+                subtitle_decision is not None
+                and subtitle_decision.codec in TEXT_SUBTITLE_CODECS
+            )
             try:
                 ok = self.encoder.encode_with_ffmpeg(
                     input_file=source_file,
@@ -1265,6 +1278,7 @@ class FFmpegTab(QWidget):
                     ffmpeg_args=ffmpeg_args,
                     subtitle_file=subtitle_file,
                     subtitle_stream_index=subtitle_track,
+                    skip_bitmap_subtitle_overlay_rewrite=skip_bitmap_rewrite,
                     dry_run=dry_run,
                 )
             except Exception as e:

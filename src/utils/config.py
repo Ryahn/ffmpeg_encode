@@ -70,7 +70,15 @@ class Config:
             "audio_name_patterns": ["English", "ENG"],
             "audio_exclude_patterns": ["Japanese", "JPN", "日本語"],
             "subtitle_language_tags": ["en", "eng"],
-            "subtitle_name_patterns": ["Signs.*Songs", "Signs.*Song", "Signs$", "English Signs", "^Signs\\s*$"],
+            "subtitle_name_patterns": [
+                "Signs.*Songs",
+                "Signs.*Song",
+                "Signs$",
+                "English Signs",
+                "^Signs\\s*$",
+                "\\[Signs\\]",
+                "English\\[Signs\\]",
+            ],
             "subtitle_exclude_patterns": ["Japanese", "JPN", "日本語"],
             "audio_normalize_enabled": False,
             "audio_normalize_loudnorm_I": -16.0,
@@ -416,7 +424,18 @@ class Config:
     
     def get_subtitle_name_patterns(self) -> list:
         """Get subtitle name patterns to match"""
-        return self.get("subtitle_name_patterns", ["Signs.*Songs", "Signs.*Song", "Signs$", "English Signs", "^Signs\\s*$"])
+        return self.get(
+            "subtitle_name_patterns",
+            [
+                "Signs.*Songs",
+                "Signs.*Song",
+                "Signs$",
+                "English Signs",
+                "^Signs\\s*$",
+                "\\[Signs\\]",
+                "English\\[Signs\\]",
+            ],
+        )
     
     def set_subtitle_name_patterns(self, patterns: list):
         """Set subtitle name patterns to match"""

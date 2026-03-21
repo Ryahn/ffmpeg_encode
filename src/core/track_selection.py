@@ -56,7 +56,7 @@ def compute_effective_tracks(
         "audio"
     )
 
-    if not subtitle_track and tracks.get("all_tracks"):
+    if subtitle_track is None and tracks.get("all_tracks"):
         for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
             if track.get("type") != "subtitles":
                 continue
@@ -72,7 +72,7 @@ def compute_effective_tracks(
                         f"Subtitle track {subtitle_track} (Signs & Songs) detected{suffix}"
                     )
                 break
-        if not subtitle_track and using_japanese_audio:
+        if subtitle_track is None and using_japanese_audio:
             for track in sorted(tracks["all_tracks"], key=lambda t: t["id"]):
                 if track.get("type") == "subtitles" and track_analyzer._matches_english_subtitle_language(
                     track.get("language")

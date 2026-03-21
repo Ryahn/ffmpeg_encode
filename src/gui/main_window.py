@@ -31,6 +31,7 @@ from .tabs.ffmpeg_settings_tab import FFmpegSettingsTab
 from .tabs.handbrake_tab import HandBrakeTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.stats_tab import StatsTab
+from .tabs.tools_tab import ToolsTab
 from .widgets.toast import ToastManager
 
 
@@ -77,6 +78,10 @@ class MainWindow(QMainWindow):
         self.ffmpeg_settings_tab = FFmpegSettingsTab()
         self.tab_widget.addTab(self.ffmpeg_settings_tab, "FFmpeg Settings")
 
+        self.tools_tab = ToolsTab()
+        self.tab_widget.addTab(self.tools_tab, "Tools")
+        self.tools_tab.main_window = self
+
         self.settings_tab = SettingsTab()
         self.tab_widget.addTab(self.settings_tab, "Settings")
 
@@ -98,6 +103,7 @@ class MainWindow(QMainWindow):
         self._tab_index_ffmpeg = self.tab_widget.indexOf(self.ffmpeg_tab)
         self._tab_index_debug = self.tab_widget.indexOf(self.debug_tab)
         self._tab_index_stats = self.tab_widget.indexOf(self.stats_tab)
+        self._tab_index_tools = self.tab_widget.indexOf(self.tools_tab)
         self.debug_tab.attach_follow_logging(self.tab_widget, self._tab_index_debug)
 
         # Connect file selection to FFmpeg Settings tab
@@ -176,6 +182,8 @@ class MainWindow(QMainWindow):
             self.settings_tab.reload_from_config()
         elif index == self._tab_index_ffmpeg:
             self.ffmpeg_tab.apply_audio_normalize_settings_from_config()
+        elif index == self._tab_index_tools:
+            self.tools_tab.refresh_loudnorm_from_config()
         elif index == self._tab_index_debug:
             self.debug_tab.reload_from_config()
         elif index == self._tab_index_stats:
@@ -193,6 +201,8 @@ class MainWindow(QMainWindow):
                 self.handbrake_tab._init_encoder()
             if hasattr(self.ffmpeg_tab, "_init_encoder"):
                 self.ffmpeg_tab._init_encoder()
+            if hasattr(self.tools_tab, "_init_encoder"):
+                self.tools_tab._init_encoder()
         except Exception as e:
             logger.warning(f"Could not refresh encoder clients: {e}")
 
@@ -213,6 +223,11 @@ class MainWindow(QMainWindow):
                     enc.stop()
         except Exception as e:
             logger.warning(f"Error stopping HandBrake encoder: {e}")
+        try:
+            if getattr(self, "tools_tab", None):
+                self.tools_tab.shutdown_tools()
+        except Exception as e:
+            logger.warning(f"Error stopping Tools batch: {e}")
         config.flush()
         try:
             dispose_engine()

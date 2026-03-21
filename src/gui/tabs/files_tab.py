@@ -516,8 +516,12 @@ class FilesTab(QWidget):
         for r in results:
             if r["no_audio_name"]:
                 no_audio_names.append(r["no_audio_name"])
+            idx = r["idx"]
+            files = self.file_list.get_files()
+            if 0 <= idx < len(files) and files[idx].get("tracks_from_user"):
+                continue
             self.file_list.update_file(
-                r["idx"],
+                idx,
                 audio_track=r["audio"],
                 subtitle_track=r["subtitle"],
                 audio_ffmpeg_stream_index=r.get("audio_ffmpeg_stream_index"),
