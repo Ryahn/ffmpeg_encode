@@ -20,20 +20,13 @@ from PyQt6.QtWidgets import (
 )
 
 from core.package_manager import PackageManager
+from gui.dialogs.update_dialog import show_update_dialog
+from utils.app_version import get_app_version
 from utils.config import config
 
 
 def _get_version() -> str:
-    try:
-        init_file = Path(__file__).resolve().parents[2] / "__init__.py"
-        if init_file.is_file():
-            for line in init_file.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped.startswith("__version__"):
-                    return stripped.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return "Unknown"
+    return get_app_version()
 
 
 class AboutTab(QWidget):
@@ -95,6 +88,10 @@ class AboutTab(QWidget):
         ref = QPushButton("Refresh dependencies")
         ref.clicked.connect(self._refresh)
         h.addWidget(ref)
+        updates = QPushButton("Check for updates")
+        updates.setToolTip("Compare this build to the latest GitHub release.")
+        updates.clicked.connect(lambda: show_update_dialog(self))
+        h.addWidget(updates)
         copy_diag = QPushButton("Copy diagnostics")
         copy_diag.setToolTip("Copy version and dependency summary for bug reports.")
         copy_diag.clicked.connect(self._copy_diagnostics)

@@ -46,18 +46,24 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "Version: $version"
       
-      - name: Build executable
-        run: |
-          pyinstaller build.spec
-      
-      - name: Create portable package
+      - name: Build portable bundle
         shell: pwsh
         run: |
-          # Portable ZIP = onedir folder (dist/ffmpeg_encode), not single exe
           $v = "${{ steps.tag_version.outputs.version }}"
+          python scripts/write_bundle_metadata.py --version $v --channel portable
+          pyinstaller build.spec
           New-Item -ItemType Directory -Force -Path dist_portable | Out-Null
           Compress-Archive -Path dist\ffmpeg_encode -DestinationPath "dist_portable\ffmpeg_encode-portable-$v.zip"
-      
+
+      - name: Rebuild for installer bundle
+        shell: pwsh
+        run: |
+          $v = "${{ steps.tag_version.outputs.version }}"
+          Remove-Item -Recurse -Force dist\ffmpeg_encode -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force build\ffmpeg_encode -ErrorAction SilentlyContinue
+          python scripts/write_bundle_metadata.py --version $v --channel inno
+          pyinstaller build.spec
+
       - name: Create installer
         shell: pwsh
         run: |
@@ -104,10 +110,12 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
       
-      - name: Build executable
+      - name: Write bundle metadata and build
         run: |
+          VERSION="${{ steps.tag_version.outputs.version }}"
+          python scripts/write_bundle_metadata.py --version "$VERSION" --channel mac_app
           pyinstaller build.spec
-      
+
       - name: Create .app bundle structure
         run: |
           VERSION="${{ steps.tag_version.outputs.version }}"

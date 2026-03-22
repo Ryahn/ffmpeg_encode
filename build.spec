@@ -9,6 +9,7 @@ a = Analysis(
     datas=[
         ('src/gui/icon.ico', 'gui'),
         ('src/gui/themes/video_encoder_dark.json', 'gui/themes'),
+        ('src/bundle_metadata.json', '.'),
     ],
     hiddenimports=[
         'PyQt6',
@@ -37,6 +38,13 @@ a = Analysis(
         'gui.widgets.progress_bar',
         'gui.widgets.toast',
         'gui.dialogs.set_tracks_dialog',
+        'gui.dialogs.update_dialog',
+        'packaging',
+        'packaging.version',
+        'utils.bundle_metadata',
+        'utils.app_version',
+        'utils.app_update',
+        'utils.repo_root',
         'core',
         'core.audio_normalize',
         'core.batch_stats',
