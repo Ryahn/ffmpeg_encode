@@ -62,6 +62,8 @@ class TrackAnalyzer:
                 'stdin': subprocess.DEVNULL,
                 'capture_output': True,
                 'text': True,
+                'encoding': 'utf-8',
+                'errors': 'replace',
                 'timeout': 30
             }
             run_kwargs.update(get_subprocess_kwargs())
@@ -99,6 +101,8 @@ class TrackAnalyzer:
                 'stdin': subprocess.DEVNULL,
                 'capture_output': True,
                 'text': True,
+                'encoding': 'utf-8',
+                'errors': 'replace',
                 'timeout': 30
             }
             run_kwargs.update(get_subprocess_kwargs())
@@ -107,6 +111,12 @@ class TrackAnalyzer:
             
             if result.returncode != 0:
                 return {"audio": None, "subtitle": None, "error": "mkvinfo failed"}
+            if result.stdout is None:
+                return {
+                    "audio": None,
+                    "subtitle": None,
+                    "error": "mkvinfo output unavailable",
+                }
             
             return self._parse_mkvinfo_output(result.stdout)
         except subprocess.TimeoutExpired:
