@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 from typing import Any, List
@@ -515,22 +514,7 @@ class SettingsTab(QWidget):
             lambda: config.set_stats_api_base_url(self.stats_api_base_url_entry.text().strip())
         )
         form.addRow("API base URL:", self.stats_api_base_url_entry)
-        self.stats_api_key_entry = QLineEdit(config.get_stats_api_app_key())
-        self.stats_api_key_entry.setEchoMode(QLineEdit.EchoMode.Password)
-        self.stats_api_key_entry.setPlaceholderText("App key from server operator")
-        self.stats_api_key_entry.editingFinished.connect(
-            lambda: config.set_stats_api_app_key(self.stats_api_key_entry.text().strip())
-        )
-        form.addRow("App key:", self.stats_api_key_entry)
         v.addLayout(form)
-        if os.environ.get("FFMPEG_ENCODE_APP_KEY", "").strip():
-            env_lbl = QLabel(
-                "<i>FFMPEG_ENCODE_APP_KEY is set in the environment; it overrides the app key above.</i>"
-            )
-            env_lbl.setWordWrap(True)
-            v.addWidget(env_lbl)
-            self.stats_api_key_entry.setEnabled(False)
-            self.stats_api_key_entry.setPlaceholderText("Using environment variable")
         return g
 
     def _save_audio_lang(self, t: str) -> None:
@@ -569,8 +553,6 @@ class SettingsTab(QWidget):
             config.set_audio_normalize_loudnorm_LRA(self.loudnorm_LRA.value())
             config.set_stats_api_enabled(self.stats_api_enabled_cb.isChecked())
             config.set_stats_api_base_url(self.stats_api_base_url_entry.text().strip())
-            if self.stats_api_key_entry.isEnabled():
-                config.set_stats_api_app_key(self.stats_api_key_entry.text().strip())
             mw = self.main_window
             if mw is not None and hasattr(mw, "refresh_encoder_clients"):
                 mw.refresh_encoder_clients()
