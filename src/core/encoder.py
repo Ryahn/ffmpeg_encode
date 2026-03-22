@@ -140,7 +140,9 @@ def detect_subtitles(video_file: Path, ffprobe_path: Optional[str] = None) -> Su
             cmd,
             capture_output=True,
             text=True,
-            timeout=10
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
         )
 
         if result.returncode == 0:
@@ -472,9 +474,10 @@ class Encoder:
                     'stdout': subprocess.PIPE,
                     'stderr': subprocess.PIPE,
                     'text': True,
+                    'encoding': 'utf-8',
+                    'errors': 'replace',
                     'bufsize': 1,
-                    'universal_newlines': True,
-                    'shell': False
+                    'shell': False,
                 }
                 popen_kwargs.update(get_subprocess_kwargs())
                 
@@ -828,6 +831,8 @@ class Encoder:
                         "stdin": subprocess.DEVNULL,
                         "capture_output": True,
                         "text": True,
+                        "encoding": "utf-8",
+                        "errors": "replace",
                         "timeout": 45,
                     }
                     run_kw.update(get_subprocess_kwargs())
@@ -936,6 +941,8 @@ def extract_subtitle_stream(
             "stdin": subprocess.DEVNULL,
             "capture_output": True,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
             "timeout": 120,
         }
         run_kwargs.update(get_subprocess_kwargs())
@@ -1022,6 +1029,8 @@ def extract_text_subtitle_to_file(
             "stdin": subprocess.DEVNULL,
             "capture_output": True,
             "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
             "timeout": 120,
         }
         run_kwargs.update(get_subprocess_kwargs())
