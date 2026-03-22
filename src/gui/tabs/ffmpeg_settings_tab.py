@@ -257,7 +257,6 @@ class FFmpegSettingsTab(QWidget):
         self.command_text = QPlainTextEdit()
         self.command_text.setReadOnly(True)
         self.command_text.setMaximumHeight(150)
-        self.command_text.setFont(self.command_text.font())
         layout.addWidget(self.command_text)
 
         # Copy button

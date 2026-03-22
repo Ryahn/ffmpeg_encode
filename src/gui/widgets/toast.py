@@ -104,7 +104,7 @@ class ToastManager:
         lbl.setMaximumWidth(380)
         lbl.setStyleSheet(
             "QLabel { background-color: transparent; color: #ffffff; border: none; "
-            "padding: 0px; margin: 0px; font-size: 13px; font-weight: 600; }"
+            "padding: 0px; margin: 0px; font-size: 10pt; font-weight: 600; }"
         )
         _apply_toast_text_outline(lbl)
         layout.addWidget(lbl)

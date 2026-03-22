@@ -11,7 +11,8 @@ def get_stylesheet() -> str:
     QWidget {{
         background-color: {T.APP_BG};
         color: {T.APP_TEXT};
-        font-size: 13px;
+        /* pt avoids QFont pointSize -1 from px-only stylesheet fonts (Qt warns on combo/popup updates) */
+        font-size: 10pt;
     }}
     QMainWindow {{
         background-color: {T.APP_BG};
@@ -64,6 +65,7 @@ def get_stylesheet() -> str:
         border-radius: 4px;
         padding: 4px 8px;
         min-height: 22px;
+        font-size: 10pt;
     }}
     QComboBox::drop-down {{
         border: none;
@@ -73,6 +75,7 @@ def get_stylesheet() -> str:
         background-color: {T.APP_BG_RAISED};
         color: {T.APP_TEXT};
         selection-background-color: {T.APP_TREE_SELECTION_BG};
+        font-size: 10pt;
     }}
     QTextEdit, QPlainTextEdit {{
         background-color: {T.APP_BG_SUNKEN};
@@ -81,7 +84,8 @@ def get_stylesheet() -> str:
         border-radius: 4px;
         padding: 6px;
         font-family: "Consolas", "Cascadia Code", monospace;
-        font-size: 12px;
+        /* pt (not px) so QFont gets a positive pointSize; px-only fonts use pointSize -1 and trigger Qt warnings */
+        font-size: 10pt;
     }}
     QTableWidget {{
         background-color: {T.APP_TREE_ROW_BG};
