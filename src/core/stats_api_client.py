@@ -15,6 +15,17 @@ from utils.logger import logger
 REQUEST_TIMEOUT_SEC = 10
 
 
+def _stats_user_agent() -> str:
+    # Cloudflare may block urllib's default User-Agent with HTTP 403 (error 1010).
+    try:
+        from utils.app_version import get_app_version
+
+        ver = get_app_version()
+    except Exception:
+        ver = "Unknown"
+    return f"VideoEncoder/{ver} (+https://github.com/Ryahn/ffmpeg_encode)"
+
+
 def _normalize_base_url(url: str) -> str:
     u = (url or "").strip().rstrip("/")
     if u.endswith("/api"):
@@ -24,7 +35,7 @@ def _normalize_base_url(url: str) -> str:
 
 def _post_json(url: str, payload: dict, headers: Optional[dict] = None) -> tuple[int, bytes]:
     data = json.dumps(payload).encode("utf-8")
-    req_headers = {"Content-Type": "application/json"}
+    req_headers = {"Content-Type": "application/json", "User-Agent": _stats_user_agent()}
     if headers:
         req_headers.update(headers)
     req = urllib.request.Request(url, data=data, headers=req_headers, method="POST")
