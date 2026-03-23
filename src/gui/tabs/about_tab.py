@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.package_manager import PackageManager
+from core.subprocess_utils import get_subprocess_kwargs
 from gui.dialogs.update_dialog import show_update_dialog
 from utils.app_version import get_app_version
 from utils.config import config
@@ -110,10 +111,11 @@ class AboutTab(QWidget):
     def _check_mediainfo(self) -> tuple[bool, str]:
         p = (config.get_mediainfo_path() or "").strip()
         if p and Path(p).is_file():
-            return True, str(Path(p).resolve())
+            resolved = str(Path(p).resolve())
+            return True, self.package_manager._normalize_detected_exe_path(resolved) or resolved
         w = shutil.which("mediainfo") or shutil.which("mediainfo.exe")
         if w:
-            return True, w
+            return True, self.package_manager._normalize_detected_exe_path(w) or w
         return False, ""
 
     def _tool_line(self, name: str, check_func) -> str:
@@ -126,13 +128,15 @@ class AboutTab(QWidget):
     def _tool_version(self, tool_name: str, path: str) -> str | None:
         try:
             if tool_name == "FFmpeg":
-                r = subprocess.run(
-                    [path, "-version"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
+                run_kw = {
+                    "args": [path, "-version"],
+                    "stdin": subprocess.DEVNULL,
+                    "capture_output": True,
+                    "text": True,
+                    "timeout": 5,
+                }
+                run_kw.update(get_subprocess_kwargs())
+                r = subprocess.run(**run_kw)
                 if r.returncode == 0 and r.stdout:
                     line = r.stdout.split("\n")[0]
                     parts = line.split()
@@ -153,28 +157,29 @@ class AboutTab(QWidget):
                         if p.replace(".", "").isdigit():
                             return p
             if tool_name == "mkvinfo (MKVToolNix)":
-                r = subprocess.run(
-                    [path, "--version"],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if r.returncode == 0 and r.stdout:
-                    parts = r.stdout.split("\n")[0].split()
-                    for p in parts:
-                        if p.replace(".", "").isdigit():
-                            return p
-            if tool_name == "MediaInfo":
-                run_kw: dict = {
+                run_kw = {
                     "args": [path, "--version"],
                     "stdin": subprocess.DEVNULL,
                     "capture_output": True,
                     "text": True,
                     "timeout": 5,
                 }
-                if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
-                    run_kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+                run_kw.update(get_subprocess_kwargs())
+                r = subprocess.run(**run_kw)
+                if r.returncode == 0 and r.stdout:
+                    parts = r.stdout.split("\n")[0].split()
+                    for p in parts:
+                        if p.replace(".", "").isdigit():
+                            return p
+            if tool_name == "MediaInfo":
+                run_kw = {
+                    "args": [path, "--version"],
+                    "stdin": subprocess.DEVNULL,
+                    "capture_output": True,
+                    "text": True,
+                    "timeout": 5,
+                }
+                run_kw.update(get_subprocess_kwargs())
                 r = subprocess.run(**run_kw)
                 if r.returncode == 0 and r.stdout:
                     line = r.stdout.split("\n")[0].strip()

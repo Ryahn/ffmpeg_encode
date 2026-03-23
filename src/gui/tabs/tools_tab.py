@@ -335,7 +335,7 @@ class ToolsTab(QWidget):
             QMessageBox.critical(
                 self,
                 "Audio Normalizer",
-                "ffprobe not found. Set FFmpeg in Settings (ffprobe should sit beside ffmpeg).",
+                "ffprobe not found. Set FFprobe or FFmpeg in Settings → Executable Paths.",
             )
             return
 
@@ -444,7 +444,7 @@ class ToolsTab(QWidget):
             QMessageBox.critical(
                 self,
                 "Extract Subtitles",
-                "ffprobe not found. Set FFmpeg in Settings.",
+                "ffprobe not found. Set FFprobe or FFmpeg in Settings → Executable Paths.",
             )
             return
 

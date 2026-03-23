@@ -134,6 +134,9 @@ class MainWindow(QMainWindow):
             missing.append("FFmpeg")
         elif not config.get_ffmpeg_path():
             config.set_ffmpeg_path(path)
+        found, path = self.package_manager.check_ffprobe()
+        if found and not config.get_ffprobe_path():
+            config.set_ffprobe_path(path)
         found, path = self.package_manager.check_handbrake()
         if not found:
             missing.append("HandBrake CLI")

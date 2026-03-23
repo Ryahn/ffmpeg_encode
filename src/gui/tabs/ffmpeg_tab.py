@@ -1128,7 +1128,7 @@ class FFmpegTab(QWidget):
                     source_file,
                     subtitle_settings,
                     ffmpeg_path,
-                    ffprobe_path=None,  # Uses "ffprobe" from PATH by default
+                    ffprobe_path=None,
                     log_callback=lambda lev, msg: self._on_log(lev, msg)
                 )
                 file_data["subtitle_strategy"] = subtitle_decision.reason

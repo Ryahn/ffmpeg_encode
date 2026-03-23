@@ -8,27 +8,23 @@ from pathlib import Path
 from typing import Any, Optional, Dict
 
 from PyQt6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import Qt
-
 from core.preset_parser import PresetParser
-from core.ffmpeg_translator import FFmpegTranslator
 from core.track_analyzer import TrackAnalyzer
+from core.subprocess_utils import get_subprocess_kwargs
 from utils.config import config
+from utils.ffmpeg_encoding import resolve_pix_fmt
 
 
 class FFmpegSettingsTab(QWidget):
@@ -53,6 +49,7 @@ class FFmpegSettingsTab(QWidget):
 
         root.addWidget(self._preset_group())
         root.addWidget(self._video_encoding_group())
+        root.addWidget(self._ffmpeg_advanced_group())
         root.addWidget(self._audio_group())
         root.addWidget(self._subtitle_group())
         root.addWidget(self._command_preview_group())
@@ -60,6 +57,8 @@ class FFmpegSettingsTab(QWidget):
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(scroll)
+
+        self._load_ffmpeg_encoding_widgets()
 
     def _preset_group(self) -> QGroupBox:
         """Preset selection and detection."""
@@ -158,6 +157,114 @@ class FFmpegSettingsTab(QWidget):
 
         group.setLayout(layout)
         return group
+
+    def _ffmpeg_advanced_group(self) -> QGroupBox:
+        """GOP, pixel format, color range, and scale dimensions (persisted)."""
+        group = QGroupBox("Advanced video (FFmpeg)")
+        layout = QFormLayout()
+
+        self.gop_spinbox = QSpinBox()
+        self.gop_spinbox.setRange(12, 600)
+        self.gop_spinbox.setToolTip("Keyframe interval (-g); larger can improve compression")
+        self.gop_spinbox.valueChanged.connect(self._on_ffmpeg_encoding_changed)
+        layout.addRow("GOP (-g):", self.gop_spinbox)
+
+        self.pix_fmt_combo = QComboBox()
+        self.pix_fmt_combo.addItem("Auto (match profile)", "auto")
+        self.pix_fmt_combo.addItem("yuv420p (8-bit 4:2:0)", "yuv420p")
+        self.pix_fmt_combo.addItem("yuv420p10le (10-bit)", "yuv420p10le")
+        self.pix_fmt_combo.addItem("yuv420p12le (12-bit)", "yuv420p12le")
+        self.pix_fmt_combo.addItem("yuv444p", "yuv444p")
+        self.pix_fmt_combo.addItem("yuv444p10le", "yuv444p10le")
+        self.pix_fmt_combo.addItem("nv12", "nv12")
+        self.pix_fmt_combo.addItem("p010le", "p010le")
+        self.pix_fmt_combo.currentIndexChanged.connect(self._on_ffmpeg_encoding_changed)
+        layout.addRow("Pixel format:", self.pix_fmt_combo)
+
+        self.color_range_combo = QComboBox()
+        self.color_range_combo.addItem("TV (limited)", "tv")
+        self.color_range_combo.addItem("PC (full)", "pc")
+        self.color_range_combo.currentIndexChanged.connect(self._on_ffmpeg_encoding_changed)
+        layout.addRow("Color range:", self.color_range_combo)
+
+        self.scale_cap_w_spin = QSpinBox()
+        self.scale_cap_w_spin.setRange(16, 7680)
+        self.scale_cap_w_spin.setToolTip("Max width in cap pass-through scale (min with iw)")
+        self.scale_cap_w_spin.valueChanged.connect(self._on_ffmpeg_encoding_changed)
+        layout.addRow("Scale cap width:", self.scale_cap_w_spin)
+
+        self.scale_cap_h_spin = QSpinBox()
+        self.scale_cap_h_spin.setRange(16, 7680)
+        self.scale_cap_h_spin.setToolTip("Max height in cap pass-through scale (min with ih)")
+        self.scale_cap_h_spin.valueChanged.connect(self._on_ffmpeg_encoding_changed)
+        layout.addRow("Scale cap height:", self.scale_cap_h_spin)
+
+        self.target_w_spin = QSpinBox()
+        self.target_w_spin.setRange(16, 7680)
+        self.target_w_spin.setToolTip("Target width for upscale / >1080p downscale branch")
+        self.target_w_spin.valueChanged.connect(self._on_ffmpeg_encoding_changed)
+        layout.addRow("Target width:", self.target_w_spin)
+
+        self.target_h_spin = QSpinBox()
+        self.target_h_spin.setRange(16, 7680)
+        self.target_h_spin.setToolTip("Target height for upscale / >1080p downscale branch")
+        self.target_h_spin.valueChanged.connect(self._on_ffmpeg_encoding_changed)
+        layout.addRow("Target height:", self.target_h_spin)
+
+        group.setLayout(layout)
+        return group
+
+    def _load_ffmpeg_encoding_widgets(self) -> None:
+        self.gop_spinbox.blockSignals(True)
+        self.pix_fmt_combo.blockSignals(True)
+        self.color_range_combo.blockSignals(True)
+        self.scale_cap_w_spin.blockSignals(True)
+        self.scale_cap_h_spin.blockSignals(True)
+        self.target_w_spin.blockSignals(True)
+        self.target_h_spin.blockSignals(True)
+        try:
+            self.gop_spinbox.setValue(config.get_ffmpeg_gop())
+            mode = config.get_ffmpeg_pix_fmt_mode()
+            if mode == "auto":
+                i = self.pix_fmt_combo.findData("auto")
+            else:
+                fmt = config.get_ffmpeg_pix_fmt()
+                i = self.pix_fmt_combo.findData(fmt)
+                if i < 0:
+                    i = self.pix_fmt_combo.findData("auto")
+            if i >= 0:
+                self.pix_fmt_combo.setCurrentIndex(i)
+            cr = config.get_ffmpeg_color_range()
+            cri = self.color_range_combo.findData(cr)
+            if cri >= 0:
+                self.color_range_combo.setCurrentIndex(cri)
+            self.scale_cap_w_spin.setValue(config.get_ffmpeg_scale_cap_w())
+            self.scale_cap_h_spin.setValue(config.get_ffmpeg_scale_cap_h())
+            self.target_w_spin.setValue(config.get_ffmpeg_target_w())
+            self.target_h_spin.setValue(config.get_ffmpeg_target_h())
+        finally:
+            self.gop_spinbox.blockSignals(False)
+            self.pix_fmt_combo.blockSignals(False)
+            self.color_range_combo.blockSignals(False)
+            self.scale_cap_w_spin.blockSignals(False)
+            self.scale_cap_h_spin.blockSignals(False)
+            self.target_w_spin.blockSignals(False)
+            self.target_h_spin.blockSignals(False)
+
+    def _on_ffmpeg_encoding_changed(self) -> None:
+        config.set_ffmpeg_gop(self.gop_spinbox.value())
+        pix_data = self.pix_fmt_combo.currentData()
+        if pix_data == "auto":
+            config.set_ffmpeg_pix_fmt_mode("auto")
+        else:
+            config.set_ffmpeg_pix_fmt_mode("manual")
+            config.set_ffmpeg_pix_fmt(str(pix_data))
+        config.set_ffmpeg_color_range(str(self.color_range_combo.currentData() or "tv"))
+        config.set_ffmpeg_scale_cap_w(self.scale_cap_w_spin.value())
+        config.set_ffmpeg_scale_cap_h(self.scale_cap_h_spin.value())
+        config.set_ffmpeg_target_w(self.target_w_spin.value())
+        config.set_ffmpeg_target_h(self.target_h_spin.value())
+        self._update_preview()
 
     def _audio_group(self) -> QGroupBox:
         """Audio codec detection and settings."""
@@ -296,6 +403,16 @@ class FFmpegSettingsTab(QWidget):
 
                     self.audio_bitrate_spinbox.setValue(parser.get_audio_bitrate())
 
+                    tw, th = parser.get_video_resolution()
+                    self.target_w_spin.blockSignals(True)
+                    self.target_h_spin.blockSignals(True)
+                    self.target_w_spin.setValue(max(16, min(7680, int(tw))))
+                    self.target_h_spin.setValue(max(16, min(7680, int(th))))
+                    self.target_w_spin.blockSignals(False)
+                    self.target_h_spin.blockSignals(False)
+                    config.set_ffmpeg_target_w(self.target_w_spin.value())
+                    config.set_ffmpeg_target_h(self.target_h_spin.value())
+
                     self.preset_path = preset_path
             except Exception as e:
                 print(f"Error loading preset: {e}")
@@ -319,7 +436,14 @@ class FFmpegSettingsTab(QWidget):
                 str(file_path)
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            run_kw = {
+                "args": cmd,
+                "capture_output": True,
+                "text": True,
+                "timeout": 10,
+            }
+            run_kw.update(get_subprocess_kwargs())
+            result = subprocess.run(**run_kw)
             if result.returncode == 0:
                 data = json.loads(result.stdout)
                 return data
@@ -396,60 +520,65 @@ class FFmpegSettingsTab(QWidget):
             return
 
         try:
-            # Build command based on current settings
             codec = self.codec_combo.currentData()
             crf = self.crf_spinbox.value()
             speed = self.speed_combo.currentData()
             profile = self.profile_combo.currentData()
             level = self.level_combo.currentData()
 
-            # Smart resolution handling
+            cap_w = self.scale_cap_w_spin.value()
+            cap_h = self.scale_cap_h_spin.value()
+            target_w = self.target_w_spin.value()
+            target_h = self.target_h_spin.value()
+            gop = self.gop_spinbox.value()
+            color_range = self.color_range_combo.currentData() or "tv"
+            pix_sel = self.pix_fmt_combo.currentData()
+            if pix_sel == "auto":
+                pix_fmt = resolve_pix_fmt(str(profile or "main"), "auto", "yuv420p")
+            else:
+                pix_fmt = resolve_pix_fmt(
+                    str(profile or "main"), "manual", str(pix_sel)
+                )
+
             if self._source_resolution:
                 src_width, src_height = self._source_resolution
             else:
-                src_width, src_height = 1920, 1080
+                src_width, src_height = target_w, target_h
 
-            # Determine target resolution
             if self.upscale_checkbox.isChecked():
-                # User wants to scale to 1080p
-                target_width, target_height = 1920, 1080
-                scale_filter = "scale=1920:1080:force_original_aspect_ratio=decrease"
+                scale_filter = (
+                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease"
+                )
+            elif src_height <= 1080:
+                scale_filter = (
+                    f"scale='min(iw,{cap_w})':'min(ih,{cap_h})'"
+                    f":force_original_aspect_ratio=decrease"
+                )
             else:
-                # Smart resolution: keep source res if < 1080p, otherwise use 1080p
-                if src_height <= 1080:
-                    # Don't upscale - keep source resolution. Commas inside min() must be
-                    # escaped (\,) or FFmpeg treats them as filter-chain separators.
-                    scale_filter = (
-                        f"scale=min(1920\\,{src_width}):min(1080\\,{src_height})"
-                        f":force_original_aspect_ratio=decrease"
-                    )
-                    target_width, target_height = src_width, src_height
-                else:
-                    # Source is > 1080p, downscale to 1080p
-                    target_width, target_height = 1920, 1080
-                    scale_filter = "scale=1920:1080:force_original_aspect_ratio=decrease"
+                scale_filter = (
+                    f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease"
+                )
 
-            # Audio codec handling
             audio_codec_option = "-c:a copy"
             if self.audio_auto_copy_checkbox.isChecked() and self._detected_audio_codec:
-                # Check if detected audio codec is compatible with MP4
                 detected = self._detected_audio_codec.lower()
                 if detected in ["aac", "mp3", "opus"]:
                     audio_codec_option = "-c:a copy"
                 else:
-                    # Use fallback codec for incompatible formats
                     fallback = self.audio_codec_combo.currentData()
                     bitrate = self.audio_bitrate_spinbox.value()
                     audio_codec_option = f"-c:a {fallback} -b:a {bitrate}k"
             else:
-                # Auto-copy disabled, use configured codec
                 fallback = self.audio_codec_combo.currentData()
                 bitrate = self.audio_bitrate_spinbox.value()
                 audio_codec_option = f"-c:a {fallback} -b:a {bitrate}k"
 
-            # Build command parts (use {INPUT}, {OUTPUT}, {AUDIO_TRACK} placeholders)
+            audio_parts = [audio_codec_option]
+            if not audio_codec_option.startswith("-c:a copy"):
+                audio_parts.append("-ac 2")
+
             cmd_parts = [
-                'ffmpeg -i {INPUT}',
+                "ffmpeg -i {INPUT}",
                 "-map 0:v:0 -map 0:a:{AUDIO_TRACK}",
                 f"-c:v {codec}",
                 f"-cq {crf}",
@@ -457,14 +586,13 @@ class FFmpegSettingsTab(QWidget):
                 f"-profile:v {profile}",
                 f"-level {level}",
                 f'-vf "{scale_filter}"',
-                "-color_range tv",
-                "-pix_fmt yuv420p",
-                "-g 60",
-                audio_codec_option,
-                "-ac 2",
+                f"-color_range {color_range}",
+                f"-pix_fmt {pix_fmt}",
+                f"-g {gop}",
+                *audio_parts,
                 "-map_chapters 0",
                 "-map_metadata 0",
-                '-y {OUTPUT}'
+                "-y {OUTPUT}",
             ]
 
             command = " ".join(cmd_parts)

@@ -17,6 +17,20 @@ class PackageManager:
         self.system = platform.system()
         self.is_windows = self.system == "Windows"
         self.is_mac = self.system == "Darwin"
+
+    def _normalize_detected_exe_path(self, path: Optional[str]) -> Optional[str]:
+        """Lowercase .exe suffix on Windows (PATH/WinGet often reports .EXE)."""
+        if not path:
+            return None
+        if not self.is_windows:
+            return path
+        p = Path(path)
+        if p.suffix.lower() != ".exe":
+            return path
+        try:
+            return str(p.resolve().with_suffix(".exe"))
+        except OSError:
+            return str(p.with_suffix(".exe"))
     
     def find_executable(self, name: str, paths: Optional[list] = None) -> Optional[str]:
         """Find an executable in PATH or specified paths"""
@@ -42,7 +56,7 @@ class PackageManager:
         for name in path_names:
             found = shutil.which(name)
             if found:
-                return True, found
+                return True, self._normalize_detected_exe_path(found)
 
         if self.is_windows:
             fallback_paths = [
@@ -57,7 +71,31 @@ class PackageManager:
 
         exe = self.find_executable(exe_on_path, fallback_paths)
         if exe:
-            return True, exe
+            return True, self._normalize_detected_exe_path(exe)
+        return False, None
+
+    def check_ffprobe(self) -> Tuple[bool, Optional[str]]:
+        """Check if ffprobe is installed (PATH first, then same fallbacks as FFmpeg on Windows)."""
+        path_names = ("ffprobe", "ffprobe.exe") if self.is_windows else ("ffprobe",)
+        for name in path_names:
+            found = shutil.which(name)
+            if found:
+                return True, self._normalize_detected_exe_path(found)
+
+        if self.is_windows:
+            fallback_paths = [
+                "C:\\ffmpeg\\bin",
+                "C:\\Program Files\\ffmpeg\\bin",
+                os.path.expanduser("~\\AppData\\Local\\UniGetUI\\Chocolatey\\bin"),
+            ]
+            exe_on_path = "ffprobe.exe"
+        else:
+            fallback_paths = ["/usr/local/bin", "/opt/homebrew/bin"]
+            exe_on_path = "ffprobe"
+
+        exe = self.find_executable(exe_on_path, fallback_paths)
+        if exe:
+            return True, self._normalize_detected_exe_path(exe)
         return False, None
     
     def check_handbrake(self) -> Tuple[bool, Optional[str]]:
@@ -66,7 +104,7 @@ class PackageManager:
         for name in path_names:
             found = shutil.which(name)
             if found:
-                return True, found
+                return True, self._normalize_detected_exe_path(found)
 
         if self.is_windows:
             fallback = ["C:\\Program Files\\HandBrake"]
@@ -75,7 +113,7 @@ class PackageManager:
             fallback = ["/usr/local/bin", "/opt/homebrew/bin"]
             exe = "HandBrakeCLI"
         found = self.find_executable(exe, fallback)
-        return (True, found) if found else (False, None)
+        return (True, self._normalize_detected_exe_path(found)) if found else (False, None)
     
     def check_mkvinfo(self) -> Tuple[bool, Optional[str]]:
         """Check if mkvinfo is installed (PATH first)."""
@@ -83,7 +121,7 @@ class PackageManager:
         for name in path_names:
             found = shutil.which(name)
             if found:
-                return True, found
+                return True, self._normalize_detected_exe_path(found)
 
         if self.is_windows:
             fallback = ["C:\\Program Files\\MKVToolNix"]
@@ -92,7 +130,7 @@ class PackageManager:
             fallback = ["/usr/local/bin", "/opt/homebrew/bin"]
             exe = "mkvinfo"
         found = self.find_executable(exe, fallback)
-        return (True, found) if found else (False, None)
+        return (True, self._normalize_detected_exe_path(found)) if found else (False, None)
     
     def install_ffmpeg(self) -> Tuple[bool, str]:
         """Install FFmpeg via package manager"""

@@ -2,7 +2,7 @@
 AppName=ffmpeg_encode
 ; Setup (installer) version. CI passes /DMyAppVersion when building from a tag.
 #ifndef MyAppVersion
-  #define MyAppVersion "1.11.0"
+  #define MyAppVersion "1.11.4"
 #endif
 AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\ffmpeg_encode

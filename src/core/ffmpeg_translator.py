@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional, List
 from .preset_parser import PresetParser
 from utils.config import config
+from utils.ffmpeg_encoding import resolve_pix_fmt
 
 
 def _escape_ffmpeg_filter_path(path: str) -> str:
@@ -107,8 +108,9 @@ class FFmpegTranslator:
         cmd.extend(["-profile:v", profile])
         cmd.extend(["-level", level])
         
-        # Resolution
-        width, height = self.preset.get_video_resolution()
+        # Resolution (config targets — same knobs as FFmpeg Settings tab)
+        width = config.get_ffmpeg_target_w()
+        height = config.get_ffmpeg_target_h()
         video_filters = [f"scale={width}:{height}:force_original_aspect_ratio=decrease"]
         
         # Add subtitle filter if needed
@@ -123,18 +125,15 @@ class FFmpegTranslator:
         if video_filters:
             cmd.extend(["-vf", ",".join(video_filters)])
         
-        # Color range
-        color_range = self.preset.get_video_color_range()
-        if color_range == "limited":
-            cmd.extend(["-color_range", "tv"])
-        else:
-            cmd.extend(["-color_range", "pc"])
-        
-        # Pixel format
-        cmd.extend(["-pix_fmt", "yuv420p"])
-        
-        # GOP size (for compatibility)
-        cmd.extend(["-g", "60"])
+        # Color range / pixel format / GOP (config — FFmpeg Settings tab)
+        cmd.extend(["-color_range", config.get_ffmpeg_color_range()])
+        pix_fmt = resolve_pix_fmt(
+            profile,
+            config.get_ffmpeg_pix_fmt_mode(),
+            config.get_ffmpeg_pix_fmt(),
+        )
+        cmd.extend(["-pix_fmt", pix_fmt])
+        cmd.extend(["-g", str(config.get_ffmpeg_gop())])
         
         if audio_filter and audio_filter.strip():
             cmd.extend(["-af", audio_filter.strip()])
@@ -209,8 +208,9 @@ class FFmpegTranslator:
         audio_filter: Optional[str] = None,
     ) -> dict:
         """Get a breakdown of the FFmpeg command"""
-        width, height = self.preset.get_video_resolution()
-        
+        width = config.get_ffmpeg_target_w()
+        height = config.get_ffmpeg_target_h()
+
         return {
             "input": str(input_file),
             "output": str(output_file),
@@ -221,7 +221,7 @@ class FFmpegTranslator:
                 "profile": self.preset.get_video_profile(),
                 "level": self.preset.get_video_level(),
                 "resolution": f"{width}x{height}",
-                "color_range": self.preset.get_video_color_range()
+                "color_range": config.get_ffmpeg_color_range(),
             },
             "audio": {
                 "codec": "aac" if self.preset.get_audio_encoder() == "av_aac" else self.preset.get_audio_encoder(),

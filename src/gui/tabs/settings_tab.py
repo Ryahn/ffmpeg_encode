@@ -79,6 +79,10 @@ class SettingsTab(QWidget):
             "FFmpeg", config.get_ffmpeg_path() or "", self._browse_ffmpeg, self._auto_ffmpeg
         )
         f.addRow("FFmpeg:", w1)
+        wf, self.ffprobe_entry = self._path_row(
+            "ffprobe", config.get_ffprobe_path() or "", self._browse_ffprobe, self._auto_ffprobe
+        )
+        f.addRow("FFprobe:", wf)
         w2, self.handbrake_entry = self._path_row(
             "HandBrake", config.get_handbrake_path() or "", self._browse_hb, self._auto_hb
         )
@@ -92,6 +96,9 @@ class SettingsTab(QWidget):
         )
         f.addRow("MediaInfo:", w4)
         self.ffmpeg_entry.editingFinished.connect(lambda: config.set_ffmpeg_path(self.ffmpeg_entry.text().strip()))
+        self.ffprobe_entry.editingFinished.connect(
+            lambda: config.set_ffprobe_path(self.ffprobe_entry.text().strip())
+        )
         self.handbrake_entry.editingFinished.connect(
             lambda: config.set_handbrake_path(self.handbrake_entry.text().strip())
         )
@@ -106,6 +113,12 @@ class SettingsTab(QWidget):
         if p:
             e.setText(p)
             config.set_ffmpeg_path(p)
+
+    def _browse_ffprobe(self, e):
+        p, _ = QFileDialog.getOpenFileName(self, "ffprobe", "", "Executable (*.exe);;All (*.*)")
+        if p:
+            e.setText(p)
+            config.set_ffprobe_path(p)
 
     def _browse_hb(self, e):
         p, _ = QFileDialog.getOpenFileName(self, "HandBrake CLI", "", "Executable (*.exe);;All (*.*)")
@@ -132,6 +145,14 @@ class SettingsTab(QWidget):
             config.set_ffmpeg_path(path)
         else:
             QMessageBox.information(self, "Not found", "FFmpeg not found on PATH.")
+
+    def _auto_ffprobe(self, e):
+        ok, path = self.package_manager.check_ffprobe()
+        if ok:
+            e.setText(path)
+            config.set_ffprobe_path(path)
+        else:
+            QMessageBox.information(self, "Not found", "ffprobe not found on PATH.")
 
     def _auto_hb(self, e):
         ok, path = self.package_manager.check_handbrake()
@@ -426,6 +447,21 @@ class SettingsTab(QWidget):
 
     def reload_from_config(self) -> None:
         """Refresh widgets from config (when user opens this tab)."""
+        self.ffmpeg_entry.blockSignals(True)
+        self.ffmpeg_entry.setText(config.get_ffmpeg_path() or "")
+        self.ffmpeg_entry.blockSignals(False)
+        self.ffprobe_entry.blockSignals(True)
+        self.ffprobe_entry.setText(config.get_ffprobe_path() or "")
+        self.ffprobe_entry.blockSignals(False)
+        self.handbrake_entry.blockSignals(True)
+        self.handbrake_entry.setText(config.get_handbrake_path() or "")
+        self.handbrake_entry.blockSignals(False)
+        self.mkvinfo_entry.blockSignals(True)
+        self.mkvinfo_entry.setText(config.get_mkvinfo_path() or "")
+        self.mkvinfo_entry.blockSignals(False)
+        self.mediainfo_entry.blockSignals(True)
+        self.mediainfo_entry.setText(config.get_mediainfo_path() or "")
+        self.mediainfo_entry.blockSignals(False)
         self.strip_spin.blockSignals(True)
         self.strip_spin.setValue(config.get_strip_leading_path_segments())
         self.strip_spin.blockSignals(False)
@@ -453,6 +489,7 @@ class SettingsTab(QWidget):
         issues: List[str] = []
         checks = [
             ("FFmpeg", self.ffmpeg_entry.text().strip()),
+            ("FFprobe", self.ffprobe_entry.text().strip()),
             ("HandBrake CLI", self.handbrake_entry.text().strip()),
             ("mkvinfo", self.mkvinfo_entry.text().strip()),
             ("MediaInfo", self.mediainfo_entry.text().strip()),
@@ -538,6 +575,7 @@ class SettingsTab(QWidget):
     def _save_all(self) -> None:
         try:
             config.set_ffmpeg_path(self.ffmpeg_entry.text().strip())
+            config.set_ffprobe_path(self.ffprobe_entry.text().strip())
             config.set_handbrake_path(self.handbrake_entry.text().strip())
             config.set_mkvinfo_path(self.mkvinfo_entry.text().strip())
             config.set_mediainfo_path(self.mediainfo_entry.text().strip())

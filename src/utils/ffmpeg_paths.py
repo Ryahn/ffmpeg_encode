@@ -8,8 +8,17 @@ from typing import Optional
 
 
 def resolve_ffprobe_path(ffmpeg_path: Optional[str] = None) -> Optional[str]:
-    """Return path to ffprobe: beside ``ffmpeg_path`` if set, else cwd/name, else PATH."""
+    """Return ffprobe: Settings path if set, else beside ffmpeg, else cwd/name, else PATH."""
     from utils.config import config
+
+    explicit = (config.get_ffprobe_path() or "").strip()
+    if explicit:
+        p = Path(explicit).expanduser()
+        try:
+            if p.is_file():
+                return str(p.resolve())
+        except OSError:
+            pass
 
     fp = ffmpeg_path if ffmpeg_path is not None else (config.get_ffmpeg_path() or "")
     candidates: list[Path] = []

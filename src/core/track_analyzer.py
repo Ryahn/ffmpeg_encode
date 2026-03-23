@@ -9,6 +9,7 @@ import shutil
 
 from core.subprocess_utils import get_subprocess_kwargs
 from utils.config import config
+from utils.ffmpeg_paths import resolve_ffprobe_path
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,8 @@ class TrackAnalyzer:
         return shutil.which("mkvinfo") or shutil.which("mkvinfo.exe")
     
     def _find_ffprobe(self) -> Optional[str]:
-        """Find ffprobe executable"""
-        return shutil.which("ffprobe") or shutil.which("ffprobe.exe")
+        """Find ffprobe via Settings / beside-ffmpeg / PATH."""
+        return resolve_ffprobe_path()
     
     def analyze_tracks(self, file_path: Path) -> Dict[str, Any]:
         """Analyze tracks in a video file"""

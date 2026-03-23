@@ -9,6 +9,8 @@ import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+from utils.ffmpeg_encoding import ALLOWED_MANUAL_PIX_FMT
+
 CONFIG_SAVE_DEBOUNCE_SEC = 0.4
 
 
@@ -54,6 +56,7 @@ class Config:
         """Set default configuration values"""
         self.config = {
             "ffmpeg_path": "",
+            "ffprobe_path": "",
             "handbrake_path": "",
             "mkvinfo_path": "",
             "mediainfo_path": "",
@@ -119,6 +122,17 @@ class Config:
             },
             "stats_api_enabled": True,
             "stats_api_base_url": "https://ffmpeg-encode.com",
+            # FFmpeg Settings tab + FFmpegTranslator (GOP, pix fmt, scale targets)
+            "ffmpeg_encoding": {
+                "gop": 120,
+                "pix_fmt_mode": "auto",
+                "pix_fmt": "yuv420p",
+                "color_range": "tv",
+                "scale_cap_w": 1920,
+                "scale_cap_h": 1080,
+                "target_w": 1920,
+                "target_h": 1080,
+            },
         }
 
     def _ensure_defaults(self):
@@ -202,6 +216,14 @@ class Config:
     def set_ffmpeg_path(self, path: str):
         """Set FFmpeg executable path"""
         self.set("ffmpeg_path", path)
+
+    def get_ffprobe_path(self) -> str:
+        """Get ffprobe executable path"""
+        return self.get("ffprobe_path", "")
+
+    def set_ffprobe_path(self, path: str):
+        """Set ffprobe executable path"""
+        self.set("ffprobe_path", path)
     
     def get_handbrake_path(self) -> str:
         """Get HandBrake executable path"""
@@ -708,6 +730,82 @@ class Config:
     def set_stats_api_base_url(self, url: str) -> None:
         self.config["stats_api_base_url"] = (url or "").strip()
         self._schedule_save()
+
+    def _ffmpeg_encoding_raw(self) -> Dict[str, Any]:
+        raw = self.config.get("ffmpeg_encoding")
+        return raw if isinstance(raw, dict) else {}
+
+    def _ffmpeg_encoding_set_key(self, key: str, value: Any) -> None:
+        fe = dict(self._ffmpeg_encoding_raw())
+        fe[key] = value
+        self.config["ffmpeg_encoding"] = fe
+        self._schedule_save()
+
+    def get_ffmpeg_gop(self) -> int:
+        v = self._ffmpeg_encoding_raw().get("gop", 120)
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = 120
+        return max(12, min(600, n))
+
+    def set_ffmpeg_gop(self, value: int) -> None:
+        self._ffmpeg_encoding_set_key("gop", max(12, min(600, int(value))))
+
+    def get_ffmpeg_pix_fmt_mode(self) -> str:
+        m = self._ffmpeg_encoding_raw().get("pix_fmt_mode", "auto")
+        return m if m in ("auto", "manual") else "auto"
+
+    def set_ffmpeg_pix_fmt_mode(self, value: str) -> None:
+        self._ffmpeg_encoding_set_key("pix_fmt_mode", value if value in ("auto", "manual") else "auto")
+
+    def get_ffmpeg_pix_fmt(self) -> str:
+        p = self._ffmpeg_encoding_raw().get("pix_fmt", "yuv420p")
+        s = str(p).strip() if p else "yuv420p"
+        return s if s in ALLOWED_MANUAL_PIX_FMT else "yuv420p"
+
+    def set_ffmpeg_pix_fmt(self, value: str) -> None:
+        s = str(value or "yuv420p").strip()
+        self._ffmpeg_encoding_set_key("pix_fmt", s if s in ALLOWED_MANUAL_PIX_FMT else "yuv420p")
+
+    def get_ffmpeg_color_range(self) -> str:
+        c = self._ffmpeg_encoding_raw().get("color_range", "tv")
+        return c if c in ("tv", "pc") else "tv"
+
+    def set_ffmpeg_color_range(self, value: str) -> None:
+        self._ffmpeg_encoding_set_key("color_range", value if value in ("tv", "pc") else "tv")
+
+    def get_ffmpeg_scale_cap_w(self) -> int:
+        return self._clamp_ffmpeg_dim(self._ffmpeg_encoding_raw().get("scale_cap_w", 1920))
+
+    def get_ffmpeg_scale_cap_h(self) -> int:
+        return self._clamp_ffmpeg_dim(self._ffmpeg_encoding_raw().get("scale_cap_h", 1080))
+
+    def set_ffmpeg_scale_cap_w(self, value: int) -> None:
+        self._ffmpeg_encoding_set_key("scale_cap_w", self._clamp_ffmpeg_dim(value))
+
+    def set_ffmpeg_scale_cap_h(self, value: int) -> None:
+        self._ffmpeg_encoding_set_key("scale_cap_h", self._clamp_ffmpeg_dim(value))
+
+    def get_ffmpeg_target_w(self) -> int:
+        return self._clamp_ffmpeg_dim(self._ffmpeg_encoding_raw().get("target_w", 1920))
+
+    def get_ffmpeg_target_h(self) -> int:
+        return self._clamp_ffmpeg_dim(self._ffmpeg_encoding_raw().get("target_h", 1080))
+
+    def set_ffmpeg_target_w(self, value: int) -> None:
+        self._ffmpeg_encoding_set_key("target_w", self._clamp_ffmpeg_dim(value))
+
+    def set_ffmpeg_target_h(self, value: int) -> None:
+        self._ffmpeg_encoding_set_key("target_h", self._clamp_ffmpeg_dim(value))
+
+    @staticmethod
+    def _clamp_ffmpeg_dim(raw: Any) -> int:
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            n = 1920
+        return max(16, min(7680, n))
 
 
 # Global config instance

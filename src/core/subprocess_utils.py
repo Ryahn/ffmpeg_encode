@@ -13,4 +13,8 @@ def get_subprocess_kwargs() -> Dict[str, Any]:
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         else:
             kwargs["creationflags"] = 0x08000000
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = si
     return kwargs

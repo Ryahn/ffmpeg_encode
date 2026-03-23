@@ -15,6 +15,7 @@ import tempfile
 
 from core.subprocess_utils import get_subprocess_kwargs
 from core.ffmpeg_bitmap_subtitle_burn import rewrite_ffmpeg_args_for_bitmap_subtitle_overlay
+from utils.ffmpeg_paths import resolve_ffprobe_path
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ def detect_subtitles(video_file: Path, ffprobe_path: Optional[str] = None) -> Su
 
     Args:
         video_file: Path to the video file
-        ffprobe_path: Optional path to ffprobe executable. If None, uses "ffprobe" from PATH
+        ffprobe_path: Optional path to ffprobe. If None, uses Settings / beside-ffmpeg / PATH via resolve_ffprobe_path()
 
     Returns:
         SubtitleInfo with detected external and embedded subtitle sources
@@ -127,7 +128,7 @@ def detect_subtitles(video_file: Path, ffprobe_path: Optional[str] = None) -> Su
 
     # Probe for embedded subtitle streams
     try:
-        ffprobe = ffprobe_path or "ffprobe"
+        ffprobe = ffprobe_path or resolve_ffprobe_path() or "ffprobe"
         cmd = [
             ffprobe,
             "-select_streams", "s",
@@ -136,14 +137,16 @@ def detect_subtitles(video_file: Path, ffprobe_path: Optional[str] = None) -> Su
             str(video_file)
         ]
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10,
-        )
+        run_kw: Dict[str, Any] = {
+            "args": cmd,
+            "capture_output": True,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "timeout": 10,
+        }
+        run_kw.update(get_subprocess_kwargs())
+        result = subprocess.run(**run_kw)
 
         if result.returncode == 0:
             import json
