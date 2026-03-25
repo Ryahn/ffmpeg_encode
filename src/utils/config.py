@@ -133,6 +133,36 @@ class Config:
                 "target_w": 1920,
                 "target_h": 1080,
             },
+            # HandBrake Settings tab (CLI flags built from UI)
+            "handbrake_encoding": {
+                "encoder": "x264",
+                "quality": 22,
+                "encoder_preset": "medium",
+                "encoder_profile": "auto",
+                "encoder_level": "auto",
+                "encoder_tune": "none",
+                "width": 0,
+                "height": 0,
+                "max_width": 1920,
+                "max_height": 1080,
+                "crop_mode": "auto",
+                "audio_encoder": "av_aac",
+                "audio_bitrate": 160,
+                "audio_mixdown": "stereo",
+                "format": "av_mp4",
+                "optimize": True,
+                "markers": True,
+                "deinterlace": "off",
+                "detelecine": "off",
+                "denoise": "off",
+                "denoise_preset": "medium",
+                "sharpen": "off",
+                "sharpen_preset": "medium",
+                "chromasmooth": "off",
+                "grayscale": False,
+                "framerate": "auto",
+                "framerate_mode": "pfr",
+            },
         }
 
     def _ensure_defaults(self):
@@ -798,6 +828,252 @@ class Config:
 
     def set_ffmpeg_target_h(self, value: int) -> None:
         self._ffmpeg_encoding_set_key("target_h", self._clamp_ffmpeg_dim(value))
+
+    # ------------------------------------------------------------------
+    # HandBrake encoding settings
+    # ------------------------------------------------------------------
+
+    def _hb_encoding_raw(self) -> Dict[str, Any]:
+        raw = self.config.get("handbrake_encoding")
+        return raw if isinstance(raw, dict) else {}
+
+    def _hb_encoding_set_key(self, key: str, value: Any) -> None:
+        he = dict(self._hb_encoding_raw())
+        he[key] = value
+        self.config["handbrake_encoding"] = he
+        self._schedule_save()
+
+    def get_hb_encoding_settings(self) -> Dict[str, Any]:
+        """Return the full handbrake_encoding dict (with defaults filled in)."""
+        return dict(self._hb_encoding_raw())
+
+    def get_hb_encoder(self) -> str:
+        _ALLOWED = {"x264", "x265", "nvenc_h264", "nvenc_h265", "vt_h264", "vt_h265"}
+        v = self._hb_encoding_raw().get("encoder", "x264")
+        return v if v in _ALLOWED else "x264"
+
+    def set_hb_encoder(self, value: str) -> None:
+        self._hb_encoding_set_key("encoder", value)
+
+    def get_hb_quality(self) -> int:
+        v = self._hb_encoding_raw().get("quality", 22)
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = 22
+        return max(0, min(51, n))
+
+    def set_hb_quality(self, value: int) -> None:
+        self._hb_encoding_set_key("quality", max(0, min(51, int(value))))
+
+    def get_hb_encoder_preset(self) -> str:
+        _ALLOWED = {
+            "ultrafast", "superfast", "veryfast", "faster", "fast",
+            "medium", "slow", "slower", "veryslow", "placebo",
+            "speed", "quality",
+        }
+        v = self._hb_encoding_raw().get("encoder_preset", "medium")
+        return v if v in _ALLOWED else "medium"
+
+    def set_hb_encoder_preset(self, value: str) -> None:
+        self._hb_encoding_set_key("encoder_preset", value)
+
+    def get_hb_encoder_profile(self) -> str:
+        _ALLOWED = {"auto", "baseline", "main", "main10", "high", "high10", "high422", "high444"}
+        v = self._hb_encoding_raw().get("encoder_profile", "auto")
+        return v if v in _ALLOWED else "auto"
+
+    def set_hb_encoder_profile(self, value: str) -> None:
+        self._hb_encoding_set_key("encoder_profile", value)
+
+    def get_hb_encoder_level(self) -> str:
+        _ALLOWED = {
+            "auto", "3.0", "3.1", "3.2", "4.0", "4.1", "4.2",
+            "5.0", "5.1", "5.2", "6.0", "6.1", "6.2",
+        }
+        v = self._hb_encoding_raw().get("encoder_level", "auto")
+        return v if v in _ALLOWED else "auto"
+
+    def set_hb_encoder_level(self, value: str) -> None:
+        self._hb_encoding_set_key("encoder_level", value)
+
+    def get_hb_encoder_tune(self) -> str:
+        _ALLOWED = {
+            "none", "film", "animation", "grain", "stillimage",
+            "psnr", "ssim", "fastdecode", "zerolatency",
+        }
+        v = self._hb_encoding_raw().get("encoder_tune", "none")
+        return v if v in _ALLOWED else "none"
+
+    def set_hb_encoder_tune(self, value: str) -> None:
+        self._hb_encoding_set_key("encoder_tune", value)
+
+    def get_hb_width(self) -> int:
+        v = self._hb_encoding_raw().get("width", 0)
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(7680, n))
+
+    def set_hb_width(self, value: int) -> None:
+        self._hb_encoding_set_key("width", max(0, min(7680, int(value))))
+
+    def get_hb_height(self) -> int:
+        v = self._hb_encoding_raw().get("height", 0)
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(7680, n))
+
+    def set_hb_height(self, value: int) -> None:
+        self._hb_encoding_set_key("height", max(0, min(7680, int(value))))
+
+    def get_hb_max_width(self) -> int:
+        return self._clamp_ffmpeg_dim(self._hb_encoding_raw().get("max_width", 1920))
+
+    def set_hb_max_width(self, value: int) -> None:
+        self._hb_encoding_set_key("max_width", self._clamp_ffmpeg_dim(value))
+
+    def get_hb_max_height(self) -> int:
+        return self._clamp_ffmpeg_dim(self._hb_encoding_raw().get("max_height", 1080))
+
+    def set_hb_max_height(self, value: int) -> None:
+        self._hb_encoding_set_key("max_height", self._clamp_ffmpeg_dim(value))
+
+    def get_hb_crop_mode(self) -> str:
+        _ALLOWED = {"auto", "disabled", "custom"}
+        v = self._hb_encoding_raw().get("crop_mode", "auto")
+        return v if v in _ALLOWED else "auto"
+
+    def set_hb_crop_mode(self, value: str) -> None:
+        self._hb_encoding_set_key("crop_mode", value)
+
+    def get_hb_audio_encoder(self) -> str:
+        _ALLOWED = {"av_aac", "copy", "ac3", "eac3", "opus", "flac", "mp3"}
+        v = self._hb_encoding_raw().get("audio_encoder", "av_aac")
+        return v if v in _ALLOWED else "av_aac"
+
+    def set_hb_audio_encoder(self, value: str) -> None:
+        self._hb_encoding_set_key("audio_encoder", value)
+
+    def get_hb_audio_bitrate(self) -> int:
+        v = self._hb_encoding_raw().get("audio_bitrate", 160)
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = 160
+        return max(32, min(640, n))
+
+    def set_hb_audio_bitrate(self, value: int) -> None:
+        self._hb_encoding_set_key("audio_bitrate", max(32, min(640, int(value))))
+
+    def get_hb_audio_mixdown(self) -> str:
+        _ALLOWED = {"mono", "stereo", "5point1", "6point1", "7point1"}
+        v = self._hb_encoding_raw().get("audio_mixdown", "stereo")
+        return v if v in _ALLOWED else "stereo"
+
+    def set_hb_audio_mixdown(self, value: str) -> None:
+        self._hb_encoding_set_key("audio_mixdown", value)
+
+    def get_hb_format(self) -> str:
+        _ALLOWED = {"av_mp4", "av_mkv", "av_webm"}
+        v = self._hb_encoding_raw().get("format", "av_mp4")
+        return v if v in _ALLOWED else "av_mp4"
+
+    def set_hb_format(self, value: str) -> None:
+        self._hb_encoding_set_key("format", value)
+
+    def get_hb_optimize(self) -> bool:
+        return bool(self._hb_encoding_raw().get("optimize", True))
+
+    def set_hb_optimize(self, value: bool) -> None:
+        self._hb_encoding_set_key("optimize", bool(value))
+
+    def get_hb_markers(self) -> bool:
+        return bool(self._hb_encoding_raw().get("markers", True))
+
+    def set_hb_markers(self, value: bool) -> None:
+        self._hb_encoding_set_key("markers", bool(value))
+
+    def get_hb_deinterlace(self) -> str:
+        _ALLOWED = {"off", "default", "skip-spatial", "bob"}
+        v = self._hb_encoding_raw().get("deinterlace", "off")
+        return v if v in _ALLOWED else "off"
+
+    def set_hb_deinterlace(self, value: str) -> None:
+        self._hb_encoding_set_key("deinterlace", value)
+
+    def get_hb_detelecine(self) -> str:
+        _ALLOWED = {"off", "default"}
+        v = self._hb_encoding_raw().get("detelecine", "off")
+        return v if v in _ALLOWED else "off"
+
+    def set_hb_detelecine(self, value: str) -> None:
+        self._hb_encoding_set_key("detelecine", value)
+
+    def get_hb_denoise(self) -> str:
+        _ALLOWED = {"off", "nlmeans", "hqdn3d"}
+        v = self._hb_encoding_raw().get("denoise", "off")
+        return v if v in _ALLOWED else "off"
+
+    def set_hb_denoise(self, value: str) -> None:
+        self._hb_encoding_set_key("denoise", value)
+
+    def get_hb_denoise_preset(self) -> str:
+        _ALLOWED = {"ultralight", "light", "medium", "strong"}
+        v = self._hb_encoding_raw().get("denoise_preset", "medium")
+        return v if v in _ALLOWED else "medium"
+
+    def set_hb_denoise_preset(self, value: str) -> None:
+        self._hb_encoding_set_key("denoise_preset", value)
+
+    def get_hb_sharpen(self) -> str:
+        _ALLOWED = {"off", "unsharp", "lapsharp"}
+        v = self._hb_encoding_raw().get("sharpen", "off")
+        return v if v in _ALLOWED else "off"
+
+    def set_hb_sharpen(self, value: str) -> None:
+        self._hb_encoding_set_key("sharpen", value)
+
+    def get_hb_sharpen_preset(self) -> str:
+        _ALLOWED = {"ultralight", "light", "medium", "strong"}
+        v = self._hb_encoding_raw().get("sharpen_preset", "medium")
+        return v if v in _ALLOWED else "medium"
+
+    def set_hb_sharpen_preset(self, value: str) -> None:
+        self._hb_encoding_set_key("sharpen_preset", value)
+
+    def get_hb_chromasmooth(self) -> str:
+        _ALLOWED = {"off", "ultralight", "light", "medium", "strong", "stronger", "verystrong"}
+        v = self._hb_encoding_raw().get("chromasmooth", "off")
+        return v if v in _ALLOWED else "off"
+
+    def set_hb_chromasmooth(self, value: str) -> None:
+        self._hb_encoding_set_key("chromasmooth", value)
+
+    def get_hb_grayscale(self) -> bool:
+        return bool(self._hb_encoding_raw().get("grayscale", False))
+
+    def set_hb_grayscale(self, value: bool) -> None:
+        self._hb_encoding_set_key("grayscale", bool(value))
+
+    def get_hb_framerate(self) -> str:
+        _ALLOWED = {"auto", "5", "10", "12", "15", "23.976", "24", "25", "29.97", "30", "48", "50", "59.94", "60"}
+        v = str(self._hb_encoding_raw().get("framerate", "auto"))
+        return v if v in _ALLOWED else "auto"
+
+    def set_hb_framerate(self, value: str) -> None:
+        self._hb_encoding_set_key("framerate", value)
+
+    def get_hb_framerate_mode(self) -> str:
+        _ALLOWED = {"cfr", "vfr", "pfr"}
+        v = self._hb_encoding_raw().get("framerate_mode", "pfr")
+        return v if v in _ALLOWED else "pfr"
+
+    def set_hb_framerate_mode(self, value: str) -> None:
+        self._hb_encoding_set_key("framerate_mode", value)
 
     @staticmethod
     def _clamp_ffmpeg_dim(raw: Any) -> int:

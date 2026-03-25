@@ -29,6 +29,7 @@ from .tabs.files_tab import FilesTab
 from .tabs.ffmpeg_tab import FFmpegTab
 from .tabs.ffmpeg_settings_tab import FFmpegSettingsTab
 from .tabs.handbrake_tab import HandBrakeTab
+from .tabs.handbrake_settings_tab import HandBrakeSettingsTab
 from .tabs.settings_tab import SettingsTab
 from .tabs.stats_tab import StatsTab
 from .tabs.tools_tab import ToolsTab
@@ -67,6 +68,14 @@ class MainWindow(QMainWindow):
         self.handbrake_tab.update_file_callback = self._update_file
         self.handbrake_tab.get_output_path_callback = self._get_output_path
         self.handbrake_tab.main_window = self
+
+        self.hb_settings_tab = HandBrakeSettingsTab()
+        self.tab_widget.addTab(self.hb_settings_tab, "HB Settings")
+        self.hb_settings_tab.get_files_callback = self._get_files
+        self.hb_settings_tab.get_output_path_callback = self._get_output_path
+        self.hb_settings_tab.main_window = self
+        # Cross-wire HandBrake tab ↔ HB Settings tab
+        self.handbrake_tab.hb_settings_tab = self.hb_settings_tab
 
         self.ffmpeg_tab = FFmpegTab()
         self.tab_widget.addTab(self.ffmpeg_tab, "FFmpeg")
@@ -166,6 +175,8 @@ class MainWindow(QMainWindow):
             self.handbrake_tab.on_files_changed()
         if hasattr(self.ffmpeg_tab, "on_files_changed"):
             self.ffmpeg_tab.on_files_changed()
+        if hasattr(self.hb_settings_tab, "on_files_changed"):
+            self.hb_settings_tab.on_files_changed()
 
     def _update_status(self, message: Optional[str] = None) -> None:
         if message:
@@ -193,9 +204,11 @@ class MainWindow(QMainWindow):
             self.stats_tab.reload_from_db()
 
     def _on_file_selected_for_ffmpeg(self, file_path: Path) -> None:
-        """Callback when a file is selected in Files tab to update FFmpeg Settings."""
+        """Callback when a file is selected in Files tab to update FFmpeg/HB Settings."""
         if self.ffmpeg_settings_tab:
             self.ffmpeg_settings_tab.set_source_file(file_path)
+        if self.hb_settings_tab:
+            self.hb_settings_tab.set_source_file(file_path)
 
     def refresh_encoder_clients(self) -> None:
         """Recreate encoders/analyzers after tool paths change in Settings."""

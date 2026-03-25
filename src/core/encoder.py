@@ -370,7 +370,49 @@ class Encoder:
             subtitle_track=subtitle_track,
         )
         return self._run_encoder(args, "HandBrake", output_file)
-    
+
+    def build_handbrake_settings_argv(
+        self,
+        input_file: Path,
+        output_file: Path,
+        settings: Dict[str, Any],
+        audio_track: int,
+        subtitle_track: Optional[int] = None,
+    ) -> List[str]:
+        """Build HandBrakeCLI argv from UI settings (no preset file)."""
+        from core.handbrake_command_builder import HandBrakeCommandBuilder
+        builder = HandBrakeCommandBuilder()
+        return builder.build_argv(
+            input_file=input_file,
+            output_file=output_file,
+            settings=settings,
+            audio_track=audio_track,
+            subtitle_track=subtitle_track,
+            handbrake_path=self.handbrake_path,
+        )
+
+    def encode_with_handbrake_settings(
+        self,
+        input_file: Path,
+        output_file: Path,
+        settings: Dict[str, Any],
+        audio_track: int,
+        subtitle_track: Optional[int] = None,
+        dry_run: bool = False,
+    ) -> bool:
+        """Encode using HandBrakeCLI with UI settings (no preset file needed)."""
+        if dry_run:
+            self._log("INFO", f"DRY RUN: Would encode {input_file} to {output_file}")
+            return True
+        args = self.build_handbrake_settings_argv(
+            input_file=input_file,
+            output_file=output_file,
+            settings=settings,
+            audio_track=audio_track,
+            subtitle_track=subtitle_track,
+        )
+        return self._run_encoder(args, "HandBrake", output_file)
+
     def encode_with_ffmpeg(
         self,
         input_file: Path,

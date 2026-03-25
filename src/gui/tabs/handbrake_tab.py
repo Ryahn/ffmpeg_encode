@@ -18,17 +18,20 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from .ffmpeg_command_util import ffmpeg_preview_to_html
+from .handbrake_command_util import generate_hb_command_preview
 from ..widgets.log_viewer import LogViewer
 from ..widgets.progress_bar import ProgressDisplay
 from core.batch_stats import BatchStats
 from core.encoder import Encoder, EncodingProgress, format_cli_argv
+from core.handbrake_command_builder import HandBrakeCommandBuilder
 from core.notifications import BatchNotification
 from core.preset_parser import PresetParser
 from core.track_analyzer import TrackAnalyzer
@@ -60,6 +63,7 @@ class HandBrakeTab(QWidget):
         self.get_files_callback: Optional[Callable] = None
         self.update_file_callback: Optional[Callable] = None
         self.get_output_path_callback: Optional[Callable] = None
+        self.hb_settings_tab = None  # set by main_window after construction
 
         self._bridge = _HandBrakeUiBridge(self)
         self._preview_timer = QTimer(self)
@@ -67,6 +71,19 @@ class HandBrakeTab(QWidget):
         self._preview_timer.timeout.connect(self._update_command_preview_display)
 
         root = QVBoxLayout(self)
+
+        # Mode toggle: Preset vs HB Settings
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("<b>Encoding Source:</b>"))
+        self._mode_preset = QRadioButton("Preset File")
+        self._mode_settings = QRadioButton("HB Settings Tab")
+        self._mode_preset.setChecked(True)
+        self._mode_preset.toggled.connect(self._on_encoding_mode_changed)
+        mode_row.addWidget(self._mode_preset)
+        mode_row.addWidget(self._mode_settings)
+        mode_row.addStretch()
+        root.addLayout(mode_row)
+
         preset_row = QHBoxLayout()
         preset_row.addWidget(QLabel("HandBrake Preset:"))
         self.preset_combo = QComboBox()
@@ -77,15 +94,15 @@ class HandBrakeTab(QWidget):
         self.preset_info_label = QLabel("")
         preset_row.addWidget(self.preset_info_label)
         root.addLayout(preset_row)
+        self._preset_row_widgets = [self.preset_combo, self.preset_info_label]
 
         pv = QHBoxLayout()
         pv.addWidget(QLabel("<b>HandBrake CLI preview</b> (first queued file)"))
         pv.addWidget(self._btn("Copy", self._copy_command_preview))
         root.addLayout(pv)
-        self.command_preview = QPlainTextEdit()
+        self.command_preview = QTextEdit()
         self.command_preview.setReadOnly(True)
         self.command_preview.setMinimumHeight(72)
-        self.command_preview.setPlaceholderText("Load a preset and add files to see the command.")
         root.addWidget(self.command_preview)
 
         opt = QHBoxLayout()
@@ -142,6 +159,16 @@ class HandBrakeTab(QWidget):
         self._refresh_preset_dropdown()
         self._load_last_preset()
         self._update_command_preview_display()
+
+    @property
+    def _use_settings_mode(self) -> bool:
+        return self._mode_settings.isChecked()
+
+    def _on_encoding_mode_changed(self) -> None:
+        is_preset = self._mode_preset.isChecked()
+        for w in self._preset_row_widgets:
+            w.setEnabled(is_preset)
+        self._schedule_preview_update()
 
     def on_files_changed(self) -> None:
         self._schedule_preview_update()
@@ -259,18 +286,54 @@ class HandBrakeTab(QWidget):
             return None, subtitle_track
 
     def _update_command_preview_display(self) -> None:
+        if self._use_settings_mode:
+            self._update_settings_mode_preview()
+        else:
+            self._update_preset_mode_preview()
+
+    def _update_settings_mode_preview(self) -> None:
+        """Show preview using HB Settings tab configuration."""
+        if not self.hb_settings_tab:
+            self.command_preview.setHtml(
+                ffmpeg_preview_to_html("Switch to the HB Settings tab to configure encoding options.")
+            )
+            return
+        settings = self.hb_settings_tab.get_settings_dict()
+        builder = HandBrakeCommandBuilder()
+        template = builder.build_template(settings, include_subtitle=True)
+        suffix = (self.suffix_entry.text() or "").strip() or config.get_default_output_suffix()
+        output_ext = self.hb_settings_tab.get_output_extension()
+
+        preview_text = generate_hb_command_preview(
+            command_template=template,
+            get_files_callback=self.get_files_callback,
+            get_output_path_callback=self.get_output_path_callback,
+            suffix=suffix,
+            output_extension=output_ext,
+        )
+        self.command_preview.setHtml(ffmpeg_preview_to_html(preview_text))
+        self._plain_preview = preview_text
+
+    def _update_preset_mode_preview(self) -> None:
+        """Show preview using preset file (original behaviour)."""
         if not self.preset_parser or not self.preset_path:
-            self.command_preview.setPlainText("Load a HandBrake preset to see the CLI command.")
+            self.command_preview.setHtml(
+                ffmpeg_preview_to_html("Load a HandBrake preset to see the CLI command.")
+            )
             return
         if not self.encoder:
-            self.command_preview.setPlainText("Encoder not initialized.")
+            self.command_preview.setHtml(ffmpeg_preview_to_html("Encoder not initialized."))
             return
         if not self.get_files_callback:
-            self.command_preview.setPlainText("Add files on the Files tab to see input/output paths.")
+            self.command_preview.setHtml(
+                ffmpeg_preview_to_html("Add files on the Files tab to see input/output paths.")
+            )
             return
         files = self.get_files_callback()
         if not files:
-            self.command_preview.setPlainText("Add files on the Files tab to see input/output paths.")
+            self.command_preview.setHtml(
+                ffmpeg_preview_to_html("Add files on the Files tab to see input/output paths.")
+            )
             return
         fd = files[0]
         source_file = Path(fd["path"])
@@ -283,10 +346,12 @@ class HandBrakeTab(QWidget):
 
         audio_track, subtitle_track = self._resolve_tracks_for_preview(fd, source_file)
         if audio_track is None:
-            self.command_preview.setPlainText(
-                "Could not determine the audio track for the first queued file.\n"
-                'Use "Load tracks" on the Files tab, or check that mkvinfo/ffprobe is configured in Settings.\n\n'
-                f"Output path would be:\n{output_file}"
+            self.command_preview.setHtml(
+                ffmpeg_preview_to_html(
+                    "Could not determine the audio track for the first queued file.\n"
+                    'Use "Load tracks" on the Files tab, or check that mkvinfo/ffprobe is configured in Settings.\n\n'
+                    f"Output path would be:\n{output_file}"
+                )
             )
             return
 
@@ -298,15 +363,17 @@ class HandBrakeTab(QWidget):
             audio_track=audio_track,
             subtitle_track=subtitle_track,
         )
-        self.command_preview.setPlainText(format_cli_argv(argv))
+        preview_text = format_cli_argv(argv)
+        self.command_preview.setHtml(ffmpeg_preview_to_html(preview_text))
+        self._plain_preview = preview_text
 
     def _copy_command_preview(self) -> None:
-        text = self.command_preview.toPlainText().strip()
-        if not text or text.startswith("Load a HandBrake") or text.startswith("Add files"):
+        text = getattr(self, "_plain_preview", "") or self.command_preview.toPlainText().strip()
+        if not text or text.startswith("Load a HandBrake") or text.startswith("Add files") or text.startswith("No "):
             self._show_toast("Nothing to copy yet.", "warning")
             return
-        if text.startswith("Could not determine"):
-            self._show_toast("Fix track analysis before copying.", "warning")
+        if text.startswith("Could not determine") or text.startswith("Switch to"):
+            self._show_toast("Fix track analysis or configuration before copying.", "warning")
             return
         QGuiApplication.clipboard().setText(text)
         self._show_toast("Command copied to clipboard.", "success")
@@ -355,8 +422,8 @@ class HandBrakeTab(QWidget):
         self._emit_toast(message, kind)
 
     def _start_encoding(self) -> None:
-        if not self.preset_parser:
-            self._show_toast("Please load a HandBrake preset first", "warning")
+        if not self._use_settings_mode and not self.preset_parser:
+            self._show_toast("Please load a HandBrake preset first, or switch to HB Settings mode", "warning")
             return
         if not self.get_files_callback:
             self._show_toast("No files available. Please scan for files first.", "warning")
@@ -382,6 +449,12 @@ class HandBrakeTab(QWidget):
         dry_run = self.dry_run_cb.isChecked()
         skip_existing = self.skip_cb.isChecked()
         suffix = self.suffix_entry.text()
+        use_settings = self._use_settings_mode
+        hb_settings = None
+        output_ext = ".mp4"
+        if use_settings and self.hb_settings_tab:
+            hb_settings = self.hb_settings_tab.get_settings_dict()
+            output_ext = self.hb_settings_tab.get_output_extension()
         completed_count = 0
         skipped_count = 0
         error_count = 0
@@ -444,7 +517,7 @@ class HandBrakeTab(QWidget):
                 output_dir = self.get_output_path_callback(source_file)
             else:
                 output_dir = source_file.parent
-            output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
+            output_file = output_dir / f"{source_file.stem}{suffix}{output_ext}"
             if skip_existing and not file_data.get("reencode", False) and output_file.exists():
                 self._on_log("INFO", f"Skipping (exists): {output_file.name}")
                 file_data["status"] = "Skipped"
@@ -463,15 +536,25 @@ class HandBrakeTab(QWidget):
             if self.update_file_callback:
                 self.update_file_callback(i, file_data)
             file_start_time = time.time()
-            success = self.encoder.encode_with_handbrake(
-                input_file=source_file,
-                output_file=output_file,
-                preset_file=self.preset_path,
-                preset_name=self.preset_parser.get_preset_name(),
-                audio_track=hb_audio,
-                subtitle_track=subtitle_track,
-                dry_run=dry_run,
-            )
+            if use_settings and hb_settings is not None:
+                success = self.encoder.encode_with_handbrake_settings(
+                    input_file=source_file,
+                    output_file=output_file,
+                    settings=hb_settings,
+                    audio_track=hb_audio,
+                    subtitle_track=subtitle_track,
+                    dry_run=dry_run,
+                )
+            else:
+                success = self.encoder.encode_with_handbrake(
+                    input_file=source_file,
+                    output_file=output_file,
+                    preset_file=self.preset_path,
+                    preset_name=self.preset_parser.get_preset_name(),
+                    audio_track=hb_audio,
+                    subtitle_track=subtitle_track,
+                    dry_run=dry_run,
+                )
             file_elapsed_time = time.time() - file_start_time
             if success:
                 file_data["status"] = "Complete"

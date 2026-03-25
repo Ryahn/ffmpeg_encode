@@ -40,7 +40,16 @@
       "Bash(python ../tests/test_subtitle_handling.py)",
       "Bash(python tests/test_subtitle_handling.py)",
       "Bash(grep -r AppleTV src/ --include=*.py)",
-      "Bash(find . -name version* -o -name *version* -type f)"
+      "Bash(find . -name version* -o -name *version* -type f)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -m pip install pytest -q)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''src/core/handbrake_command_builder.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''src/gui/tabs/handbrake_command_util.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''src/gui/tabs/handbrake_settings_tab.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''src/gui/tabs/handbrake_tab.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''src/gui/main_window.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''src/utils/config.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''src/core/encoder.py'', doraise=True\\); print\\(''OK''\\)\")"
     ]
   }
 }
