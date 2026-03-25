@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -29,6 +30,7 @@ from core.file_scanner import FileScanner
 from core.track_analyzer import TrackAnalyzer
 from core.track_selection import audio_mkv_stream_id_for_ordinal, compute_effective_tracks
 from utils.config import config
+from utils.ffmpeg_paths import resolve_ffprobe_path
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,60 @@ class _LoadTracksWorker(QObject):
         self.finished.emit(results, failed, scope)
 
 
+class _CheckSubsWorker(QObject):
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(list)
+
+    _CODEC_MAP = {
+        "ass": "ASS",
+        "ssa": "ASS",
+        "subrip": "SRT",
+        "srt": "SRT",
+        "hdmv_pgs_subtitle": "PGS",
+        "pgssub": "PGS",
+    }
+
+    def __init__(self, indices: List[int], files: list, ffprobe_path: str):
+        super().__init__()
+        self._indices = indices
+        self._files = files
+        self._ffprobe_path = ffprobe_path
+
+    def run(self) -> None:
+        results: List[dict] = []
+        total = len(self._indices)
+        for done, idx in enumerate(self._indices, start=1):
+            self.progress.emit(done, total)
+            source_file = str(self._files[idx]["path"])
+            try:
+                out = subprocess.check_output(
+                    [
+                        self._ffprobe_path,
+                        "-v", "error",
+                        "-select_streams", "s",
+                        "-show_entries", "stream=codec_name",
+                        "-of", "csv=p=0",
+                        source_file,
+                    ],
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+                lines = [ln.strip() for ln in out.decode(errors="replace").splitlines() if ln.strip()]
+            except Exception:
+                lines = []
+            if not lines:
+                sub_type = "None"
+            else:
+                seen: list = []
+                for codec in lines:
+                    label = self._CODEC_MAP.get(codec.lower(), codec.upper())
+                    if label not in seen:
+                        seen.append(label)
+                sub_type = ", ".join(seen)
+            results.append({"idx": idx, "sub_type": sub_type})
+        self.finished.emit(results)
+
+
 class FilesTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -115,6 +171,8 @@ class FilesTab(QWidget):
         self._analyze_thread: Optional[QThread] = None
         self._analyze_worker: Optional[_AnalyzeOneWorker] = None
         self._set_tracks_btn: Optional[QPushButton] = None
+        self._check_subs_busy = False
+        self._check_subs_thread: Optional[QThread] = None
 
         mkvinfo_path = config.get_mkvinfo_path() or "mkvinfo"
         self.track_analyzer = TrackAnalyzer(
@@ -197,8 +255,8 @@ class FilesTab(QWidget):
         batch.addWidget(self._set_tracks_btn)
         self.load_tracks_btn = self._btn("Load tracks", self._load_tracks)
         batch.addWidget(self.load_tracks_btn)
-        batch.addWidget(self._btn("Mark for re-encode", self._mark_for_reencode))
-        batch.addWidget(self._btn("Clear re-encode", self._clear_reencode_marks))
+        self._check_subs_btn = self._btn("Check Subs Type", self._check_subs_type)
+        batch.addWidget(self._check_subs_btn)
         root.addLayout(batch)
 
         last_scan = config.get_last_scan_folder()
@@ -450,30 +508,50 @@ class FilesTab(QWidget):
     def _deselect_all(self) -> None:
         self.file_list.deselect_all()
 
-    def _mark_for_reencode(self) -> None:
-        indices = self.file_list.get_action_target_indices()
-        if not indices:
-            QMessageBox.warning(
+    def _check_subs_type(self) -> None:
+        if self._check_subs_busy:
+            return
+        files = self.file_list.get_files()
+        if not files:
+            self._show_toast("Add files to the list first.", "warning")
+            return
+        ffprobe = resolve_ffprobe_path()
+        if not ffprobe:
+            QMessageBox.critical(
                 self,
-                "No selection",
-                "Select one or more files (click rows or use the checkbox column).",
+                "ffprobe not found",
+                "Install FFmpeg (ffprobe) to use subtitle type detection.",
             )
             return
-        count = self.file_list.set_reencode_for_indices(indices, True)
-        QMessageBox.information(
-            self,
-            "Re-encode",
-            f"Marked {count} file(s). They will be encoded even if the output file already exists.",
-        )
-
-    def _clear_reencode_marks(self) -> None:
         indices = self.file_list.get_action_target_indices()
         if not indices:
-            indices = list(range(self.file_list.get_file_count()))
-        if not indices:
-            return
-        count = self.file_list.set_reencode_for_indices(indices, False)
-        self._show_toast(f"Cleared re-encode mark on {count} file(s).", "info")
+            indices = list(range(len(files)))
+        self._check_subs_busy = True
+        self._check_subs_btn.setEnabled(False)
+
+        self._check_subs_thread = QThread()
+        self._check_subs_worker = _CheckSubsWorker(indices, files, ffprobe)
+        self._check_subs_worker.moveToThread(self._check_subs_thread)
+        self._check_subs_thread.started.connect(self._check_subs_worker.run)
+        self._check_subs_worker.finished.connect(self._on_check_subs_finished)
+        self._check_subs_worker.finished.connect(self._check_subs_thread.quit)
+        self._check_subs_worker.finished.connect(self._check_subs_worker.deleteLater)
+        self._check_subs_thread.finished.connect(self._check_subs_thread.deleteLater)
+        self._check_subs_worker.progress.connect(self._on_check_subs_progress)
+        self._check_subs_thread.start()
+
+    def _on_check_subs_progress(self, done: int, total: int) -> None:
+        if self.on_status:
+            self.on_status(f"Checking sub types… {done}/{total}")
+
+    def _on_check_subs_finished(self, results: list) -> None:
+        for r in results:
+            self.file_list.update_file(r["idx"], sub_type=r["sub_type"])
+        self._check_subs_busy = False
+        self._check_subs_btn.setEnabled(True)
+        if self.on_status:
+            self.on_status(f"Ready - {self.file_list.get_file_count()} file(s) in queue")
+        self._show_toast(f"Checked subtitle types for {len(results)} file(s).", "success")
 
     def _load_tracks(self) -> None:
         if self._load_tracks_busy:

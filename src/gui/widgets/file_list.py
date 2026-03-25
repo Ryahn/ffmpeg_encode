@@ -55,7 +55,7 @@ class FileListWidget(QWidget):
     COL_PATH = 1
     COL_SIZE = 2
     COL_TRACKS = 3
-    COL_SUBTITLE = 4
+    COL_SUB_TYPE = 4
     COL_STATUS = 5
 
     def __init__(self, parent: QWidget | None = None):
@@ -69,18 +69,18 @@ class FileListWidget(QWidget):
         self._refresh_timer: Optional[QTimer] = None
 
         self._table = _DropTable(self, 0, 6)
-        self._table.setHorizontalHeaderLabels(["", "Source Path", "Size", "Tracks", "Subtitle Strategy", "Status"])
+        self._table.setHorizontalHeaderLabels(["", "Source Path", "Size", "Tracks", "Sub Type", "Status"])
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(self.COL_SEL, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(self.COL_PATH, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(self.COL_SIZE, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(self.COL_TRACKS, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(self.COL_SUBTITLE, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(self.COL_SUB_TYPE, QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(self.COL_SEL, 36)
         self._table.setColumnWidth(self.COL_PATH, 320)
         self._table.setColumnWidth(self.COL_TRACKS, 150)
-        self._table.setColumnWidth(self.COL_SUBTITLE, 150)
+        self._table.setColumnWidth(self.COL_SUB_TYPE, 150)
         self._table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -128,8 +128,6 @@ class FileListWidget(QWidget):
         if file_data.get("output_size") is not None:
             size_str = f"{size_str} → {self.scanner.format_file_size(file_data['output_size'])}"
         status = file_data.get("status", self.STATUS_PENDING)
-        if file_data.get("reencode"):
-            status = f"{status} (re-encode)"
         return display_path, size_str, track_str, status, path_str
 
     def _set_row(self, row: int, file_data: Dict) -> None:
@@ -159,11 +157,11 @@ class FileListWidget(QWidget):
         it_tr.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
         self._table.setItem(row, self.COL_TRACKS, it_tr)
 
-        # Subtitle strategy column
-        subtitle_strategy = file_data.get("subtitle_strategy", "—")
-        it_sub = QTableWidgetItem(subtitle_strategy)
+        # Sub type column
+        sub_type = file_data.get("sub_type") or "—"
+        it_sub = QTableWidgetItem(sub_type)
         it_sub.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        self._table.setItem(row, self.COL_SUBTITLE, it_sub)
+        self._table.setItem(row, self.COL_SUB_TYPE, it_sub)
 
         it_st = QTableWidgetItem(status)
         it_st.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
@@ -219,8 +217,8 @@ class FileListWidget(QWidget):
                 return f.get("size", 0)
             if c == self.COL_TRACKS:
                 return (str(f.get("audio_track", "")), str(f.get("subtitle_track", "")))
-            if c == self.COL_SUBTITLE:
-                return f.get("subtitle_strategy", "").lower()
+            if c == self.COL_SUB_TYPE:
+                return (f.get("sub_type") or "").lower()
             if c == self.COL_STATUS:
                 return f.get("status", "").lower()
             return i
@@ -286,7 +284,7 @@ class FileListWidget(QWidget):
             "output_path": None,
             "output_size": None,
             "selected": False,
-            "reencode": False,
+            "sub_type": None,
             "tracks_from_user": False,
         }
         self.files.append(file_data)
@@ -355,11 +353,3 @@ class FileListWidget(QWidget):
             return sorted(set(indices))
         return sorted(self.get_selected_indices())
 
-    def set_reencode_for_indices(self, indices: List[int], value: bool) -> int:
-        count = 0
-        for idx in indices:
-            if 0 <= idx < len(self.files):
-                self.files[idx]["reencode"] = value
-                self._set_row(idx, self.files[idx])
-                count += 1
-        return count
