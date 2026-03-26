@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..workers import AnalyzeOneWorker
 from .ffmpeg_command_util import (
     ffmpeg_preview_to_html,
     generate_command_preview,
@@ -58,20 +59,6 @@ from utils.config import config
 from utils.logger import logger
 
 
-class _AnalyzeOneWorker(QObject):
-    """Runs analyze_tracks() for a single file off the GUI thread."""
-
-    finished = pyqtSignal(object, object)  # (tracks_dict, source_file)
-
-    def __init__(self, source_file: Path, analyzer: TrackAnalyzer):
-        super().__init__()
-        self._source_file = source_file
-        self._analyzer = analyzer
-
-    def run(self) -> None:
-        tracks = self._analyzer.analyze_tracks(self._source_file)
-        self.finished.emit(tracks, self._source_file)
-
 
 class _FFmpegUiBridge(QObject):
     log_msg = pyqtSignal(str, str)
@@ -79,6 +66,7 @@ class _FFmpegUiBridge(QObject):
     reset_ui = pyqtSignal()
     toast = pyqtSignal(str, str)
     status_text = pyqtSignal(str)
+    file_updated = pyqtSignal(int, object)
 
 
 class FFmpegTab(QWidget):
@@ -99,7 +87,7 @@ class FFmpegTab(QWidget):
         self.track_analyzer: Optional[TrackAnalyzer] = None
         self.encoding_thread: Optional[threading.Thread] = None
         self._detect_thread: Optional[QThread] = None
-        self.is_encoding = False
+        self._is_encoding = threading.Event()
         self.batch_stats: Optional[BatchStats] = None
         self.get_files_callback: Optional[Callable] = None
         self.update_file_callback: Optional[Callable] = None
@@ -298,6 +286,7 @@ class FFmpegTab(QWidget):
         self._bridge.reset_ui.connect(self._reset_ui_on_encode_end)
         self._bridge.toast.connect(self._emit_toast)
         self._bridge.status_text.connect(self.progress_display.set_status)
+        self._bridge.file_updated.connect(self._on_file_updated)
 
         self._init_encoder()
         self._refresh_preset_dropdown()
@@ -305,9 +294,15 @@ class FFmpegTab(QWidget):
         self._load_last_preset()
         self._update_command_preview_display()
 
+    @property
+    def is_encoding(self) -> bool:
+        return self._is_encoding.is_set()
+
     _AF_OPTION_RE = re.compile(
         r"(?P<prefix>\s)-af\s+(?P<val>'[^']*'|\"[^\"]*\"|\S+)"
     )
+
+    # --- Widget Helpers ---
 
     def _btn(self, text, slot):
         b = QPushButton(text)
@@ -339,6 +334,8 @@ class FFmpegTab(QWidget):
         )
         b.clicked.connect(lambda: self._insert_placeholder(token))
         return b
+
+    # --- Audio Normalize / Loudnorm ---
 
     def _sync_loudnorm_controls_enabled(self) -> None:
         enabled = self.loudnorm_cb.isChecked()
@@ -517,6 +514,8 @@ class FFmpegTab(QWidget):
 
     def on_files_changed(self) -> None:
         self._schedule_preview_update()
+
+    # --- Preset Management ---
 
     def _init_encoder(self) -> None:
         ffmpeg_path = config.get_ffmpeg_path() or "ffmpeg"
@@ -749,6 +748,8 @@ class FFmpegTab(QWidget):
 
         return new_args
 
+    # --- Command Preview ---
+
     def _update_command_preview(self) -> None:
         if not self.ffmpeg_translator:
             return
@@ -808,7 +809,7 @@ class FFmpegTab(QWidget):
         self.detect_tracks_btn.setEnabled(False)
 
         self._detect_thread = QThread()
-        worker = _AnalyzeOneWorker(source_file, self.track_analyzer)
+        worker = AnalyzeOneWorker(source_file, self.track_analyzer)
         worker.moveToThread(self._detect_thread)
         self._detect_thread.started.connect(worker.run)
         worker.finished.connect(
@@ -889,6 +890,8 @@ class FFmpegTab(QWidget):
         else:
             self._show_toast("Nothing useful to copy yet.", "warning")
 
+    # --- Saved Commands ---
+
     def _save_command(self) -> None:
         cmd = self.cmd_text.toPlainText().strip()
         if not cmd:
@@ -968,6 +971,8 @@ class FFmpegTab(QWidget):
         self.cmd_text.insertPlainText(p)
         self._schedule_preview_update()
 
+    # --- Bridge Callbacks ---
+
     def _append_log(self, level: str, message: str) -> None:
         self.log_viewer.add_log(level, message)
 
@@ -1018,8 +1023,15 @@ class FFmpegTab(QWidget):
         if hasattr(w, "toast_manager"):
             w.toast_manager.show(message, message_type=kind, duration=5)
 
+    def _on_file_updated(self, index: int, file_data: object) -> None:
+        if self.update_file_callback:
+            self.update_file_callback(index, file_data)
+
+
     def _show_toast(self, message: str, kind: str = "warning") -> None:
         self._emit_toast(message, kind)
+
+    # --- Encoding Orchestration ---
 
     def _start_encoding(self) -> None:
         cmd = self.cmd_text.toPlainText().strip()
@@ -1029,11 +1041,11 @@ class FFmpegTab(QWidget):
         if not self.get_files_callback or not self.get_files_callback():
             self._show_toast("No files to encode", "warning")
             return
-        if self.is_encoding:
+        if self._is_encoding.is_set():
             return
         if self.encoding_thread and self.encoding_thread.is_alive():
             self.encoding_thread.join(timeout=2.0)
-        self.is_encoding = True
+        self._is_encoding.set()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         if self.encoder:
@@ -1056,7 +1068,7 @@ class FFmpegTab(QWidget):
         skipped_count = 0
         error_count = 0
         for i, file_data in enumerate(files):
-            if not self.is_encoding:
+            if not self._is_encoding.is_set():
                 break
             source_file = Path(file_data["path"])
             if file_data.get("tracks_from_user"):
@@ -1148,8 +1160,7 @@ class FFmpegTab(QWidget):
                 skipped_count += 1
                 continue
 
-            if self.update_file_callback:
-                self.update_file_callback(i, file_data)
+            self._bridge.file_updated.emit(i, file_data)
             output_dir = (
                 self.get_output_path_callback(source_file)
                 if self.get_output_path_callback
@@ -1171,8 +1182,7 @@ class FFmpegTab(QWidget):
                 skipped_count += 1
                 continue
             file_data["status"] = "Encoding"
-            if self.update_file_callback:
-                self.update_file_callback(i, file_data)
+            self._bridge.file_updated.emit(i, file_data)
 
             # Extract text-based subtitles to external files if policy requires it
             # (skip if Custom Override is enabled)
@@ -1324,8 +1334,7 @@ class FFmpegTab(QWidget):
                         error_msg="failed",
                     )
                 error_count += 1
-            if self.update_file_callback:
-                self.update_file_callback(i, file_data)
+            self._bridge.file_updated.emit(i, file_data)
             if self.batch_stats and completed_count >= 3:
                 eta = self.batch_stats.calculate_batch_eta(len(files), completed_count)
                 if eta:
@@ -1345,7 +1354,7 @@ class FFmpegTab(QWidget):
         self._bridge.reset_ui.emit()
 
     def _reset_ui_on_encode_end(self) -> None:
-        self.is_encoding = False
+        self._is_encoding.clear()
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_display.reset()
@@ -1354,6 +1363,6 @@ class FFmpegTab(QWidget):
         def w():
             if self.encoder:
                 self.encoder.stop()
-            self.is_encoding = False
+            self._is_encoding.clear()
 
         threading.Thread(target=w, daemon=True).start()

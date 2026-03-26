@@ -67,6 +67,7 @@ class FileListWidget(QWidget):
         self._sort_column: Optional[int] = None
         self._sort_reverse = False
         self._refresh_timer: Optional[QTimer] = None
+        self._path_to_index: Dict[str, int] = {}
 
         self._table = _DropTable(self, 0, 6)
         self._table.setHorizontalHeaderLabels(["", "Source Path", "Size", "Tracks", "Sub Type", "Status"])
@@ -229,12 +230,16 @@ class FileListWidget(QWidget):
         self.files = new_files
         self._rebuild_table()
 
+    def _rebuild_path_index(self) -> None:
+        self._path_to_index = {str(fd["path"]): i for i, fd in enumerate(self.files)}
+
     def _rebuild_table(self) -> None:
         self._table.blockSignals(True)
         self._table.setRowCount(len(self.files))
         for idx, fd in enumerate(self.files):
             self._set_row(idx, fd)
         self._table.blockSignals(False)
+        self._rebuild_path_index()
         QTimer.singleShot(0, self._refresh_path_cells)
 
     def resizeEvent(self, event) -> None:
@@ -288,6 +293,7 @@ class FileListWidget(QWidget):
             "tracks_from_user": False,
         }
         self.files.append(file_data)
+        self._path_to_index[str(file_data["path"])] = len(self.files) - 1
         row = len(self.files) - 1
         self._table.insertRow(row)
         self._set_row(row, file_data)
@@ -298,10 +304,7 @@ class FileListWidget(QWidget):
         path = kwargs.get("path")
         idx = index
         if path is not None:
-            for i, fd in enumerate(self.files):
-                if fd.get("path") == path:
-                    idx = i
-                    break
+            idx = self._path_to_index.get(str(path), index)
         if 0 <= idx < len(self.files):
             self.files[idx].update(kwargs)
             self._set_row(idx, self.files[idx])
@@ -310,9 +313,11 @@ class FileListWidget(QWidget):
         if 0 <= index < len(self.files):
             self.files.pop(index)
             self._rebuild_table()
+            self._rebuild_path_index()
 
     def clear(self) -> None:
         self.files.clear()
+        self._path_to_index.clear()
         self._table.setRowCount(0)
 
     def get_files(self) -> List[Dict]:

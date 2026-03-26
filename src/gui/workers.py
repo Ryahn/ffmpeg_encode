@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+if TYPE_CHECKING:
+    from core.track_analyzer import TrackAnalyzer
 
 
 class WorkerThread(QThread):
@@ -72,3 +76,22 @@ class RunnableWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
             self.finished_ok.emit(False)
+
+
+class AnalyzeOneWorker(QObject):
+    """Runs analyze_tracks() for a single file off the GUI thread."""
+
+    finished = pyqtSignal(object, object)  # (tracks_dict, source_file)
+    error = pyqtSignal(str, object)        # (error_message, source_file)
+
+    def __init__(self, source_file: Path, analyzer: "TrackAnalyzer"):
+        super().__init__()
+        self._source_file = source_file
+        self._analyzer = analyzer
+
+    def run(self) -> None:
+        try:
+            tracks = self._analyzer.analyze_tracks(self._source_file)
+            self.finished.emit(tracks, self._source_file)
+        except Exception as exc:
+            self.error.emit(str(exc), self._source_file)

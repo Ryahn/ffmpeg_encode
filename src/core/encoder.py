@@ -155,6 +155,8 @@ def detect_subtitles(video_file: Path, ffprobe_path: Optional[str] = None) -> Su
 
             for stream in streams:
                 index = stream.get("index")
+                if index is None:
+                    continue
                 codec = stream.get("codec_name", "unknown")
 
                 if codec in TEXT_SUBTITLE_CODECS:
@@ -215,80 +217,6 @@ def process_file_subtitles(
             log_callback("WARNING", warning)
 
     return decision
-
-
-def build_subtitle_ffmpeg_args(
-    decision: SubtitleDecision,
-    subtitle_info: SubtitleInfo,
-    base_args: List[str]
-) -> List[str]:
-    """Modify FFmpeg arguments based on subtitle decision.
-
-    Handles:
-    - Removing subtitle filters for mux/omit decisions
-    - Adding -map arguments for muxing
-    - Setting subtitle codec for muxing
-
-    Args:
-        decision: The subtitle decision from policy
-        subtitle_info: Detected subtitle sources
-        base_args: Original FFmpeg argument list
-
-    Returns:
-        Modified FFmpeg arguments
-    """
-    args = base_args.copy()
-
-    # Handle different actions
-    if decision.action == "mux":
-        # Remove subtitle burning filters
-        args = [arg for arg in args if not (
-            isinstance(arg, str) and (
-                arg.startswith("subtitles=") or
-                "subtitles=" in arg or
-                "-vf" in arg and "subtitles" in args[args.index(arg)+1] if args.index(arg)+1 < len(args) else False
-            )
-        )]
-
-        # Determine which subtitle stream to mux
-        if decision.source == "external_text":
-            # Will be added separately with -i
-            pass
-        elif decision.source in ("embedded_text", "embedded_ass"):
-            # Add -map argument for embedded stream
-            stream_index = decision.stream_index
-            if stream_index is not None:
-                # Add mapping for subtitle stream
-                if "-map" in args:
-                    # Insert after last -map
-                    last_map_idx = len(args) - 1 - args[::-1].index("-map") - 1
-                    args.insert(last_map_idx + 2, f"0:s:{stream_index}")
-                    args.insert(last_map_idx + 1, "-map")
-            # Add subtitle codec for muxing
-            if "-c:s" not in args:
-                args.extend(["-c:s", "mov_text"])
-
-    elif decision.action == "omit":
-        # Remove subtitle-related arguments and filters
-        new_args = []
-        skip_next = False
-        for i, arg in enumerate(args):
-            if skip_next:
-                skip_next = False
-                continue
-            if arg == "-map" and i + 1 < len(args) and "0:s" in args[i + 1]:
-                skip_next = True
-                continue
-            if arg.startswith("subtitles=") or "subtitles=" in arg:
-                continue
-            new_args.append(arg)
-        args = new_args
-
-    elif decision.action == "skip_file":
-        # Return empty args as signal to skip
-        return []
-
-    return args
 
 
 class EncodingProgress:
@@ -490,7 +418,8 @@ class Encoder:
         try:
             # Reset duration for new encoding
             self._input_duration = None
-            
+
+            # --- Launch ---
             self._log("INFO", f"Starting {encoder_name} encoding...")
             # Format command for display (quote paths with spaces for readability)
             cmd_display = []
@@ -500,7 +429,7 @@ class Encoder:
                 else:
                     cmd_display.append(arg)
             self._log("INFO", f"Command: {' '.join(cmd_display)}")
-            
+
             # Check if encoder executable exists
             encoder_exe = args[0] if args else None
             if encoder_exe:
@@ -509,7 +438,7 @@ class Encoder:
                 if not encoder_exe_check.startswith("ffmpeg") and not Path(encoder_exe_check).exists():
                     self._log("ERROR", f"Encoder executable not found: {encoder_exe_check}")
                     return False
-            
+
             self._log("INFO", f"Launching {encoder_name} process...")
             try:
                 # Hide console window on Windows (for release builds)
@@ -525,10 +454,10 @@ class Encoder:
                     'shell': False,
                 }
                 popen_kwargs.update(get_subprocess_kwargs())
-                
+
                 process = subprocess.Popen(**popen_kwargs)
                 self._log("INFO", f"Process started (PID: {process.pid})")
-                
+
                 # Store process reference for forceful termination
                 with self._process_lock:
                     self._current_process = process
@@ -541,7 +470,7 @@ class Encoder:
                 import traceback
                 self._log("ERROR", f"Traceback: {traceback.format_exc()}")
                 return False
-            
+
             stdout_queue: Queue = Queue()
             stderr_queue: Queue = Queue()
             stdout_thread = threading.Thread(
@@ -566,6 +495,7 @@ class Encoder:
                     self._current_process = None
                 return False
 
+            # --- Poll ---
             while process.poll() is None:
                 if self._stop_event.is_set():
                     self._log("INFO", "Stop event set, terminating process...")
@@ -591,27 +521,28 @@ class Encoder:
                 if stderr_thread.is_alive():
                     stderr_thread.join(timeout=1)
                 return False
-            
+
+            # --- Finalize ---
             # Get remaining output
             self._log("INFO", f"Process finished with return code: {process.returncode}")
-            
+
             # Clear process reference
             with self._process_lock:
                 self._current_process = None
-            
+
             # Close pipes to unblock reading threads
             self._close_pipes(process)
-            
+
             # Wait for threads with timeout to prevent hanging
             if stdout_thread.is_alive():
                 stdout_thread.join(timeout=1)
             if stderr_thread.is_alive():
                 stderr_thread.join(timeout=1)
-            
+
             stderr_lines: List[str] = []
             self._drain_stdout_queue(stdout_queue, encoder_name)
             self._drain_stderr_queue(stderr_queue, encoder_name, stderr_lines)
-            
+
             # If process failed, log all stderr as error
             if process.returncode != 0:
                 error_output = '\n'.join(stderr_lines)

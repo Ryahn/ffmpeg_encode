@@ -244,6 +244,21 @@ class MainWindow(QMainWindow):
                 self.tools_tab.shutdown_tools()
         except Exception as e:
             logger.warning(f"Error stopping Tools batch: {e}")
+        # Join encoding threads before tearing down the DB engine
+        try:
+            ffmpeg_thread = getattr(self.ffmpeg_tab, "encoding_thread", None)
+            if ffmpeg_thread and ffmpeg_thread.is_alive():
+                logger.info("Waiting for FFmpeg encoding thread to finish...")
+                ffmpeg_thread.join(timeout=10.0)
+        except Exception as e:
+            logger.warning(f"Error joining FFmpeg encoding thread: {e}")
+        try:
+            hb_thread = getattr(self.handbrake_tab, "encoding_thread", None)
+            if hb_thread and hb_thread.is_alive():
+                logger.info("Waiting for HandBrake encoding thread to finish...")
+                hb_thread.join(timeout=10.0)
+        except Exception as e:
+            logger.warning(f"Error joining HandBrake encoding thread: {e}")
         config.flush()
         try:
             dispose_engine()

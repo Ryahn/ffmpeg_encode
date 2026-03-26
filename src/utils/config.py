@@ -16,7 +16,11 @@ CONFIG_SAVE_DEBOUNCE_SEC = 0.4
 
 class Config:
     """Manages application configuration"""
-    
+
+    # -----------------------------------------------------------------------
+    # Storage & Initialization
+    # -----------------------------------------------------------------------
+
     def __init__(self):
         # Use platform-appropriate config directory
         if sys.platform == "win32":
@@ -44,6 +48,8 @@ class Config:
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     self.config = json.load(f)
+                if not isinstance(self.config, dict):
+                    self.config = {}
             except (json.JSONDecodeError, OSError, UnicodeError):
                 self.config = {}
         else:
@@ -167,19 +173,15 @@ class Config:
 
     def _ensure_defaults(self):
         """Merge default configuration with loaded config to fill in missing keys"""
-        defaults = {}
+        saved = self.config.copy()
         self._set_defaults()
-        defaults = self.config.copy()
-
-        # Merge defaults into current config, preserving existing values
-        for key, default_value in defaults.items():
-            if key not in self.config:
-                self.config[key] = default_value
-            elif isinstance(default_value, dict) and isinstance(self.config.get(key), dict):
-                # For nested dicts, merge recursively
-                for nested_key, nested_default in default_value.items():
-                    if nested_key not in self.config[key]:
-                        self.config[key][nested_key] = nested_default
+        # Layer saved values on top of defaults so user settings are preserved
+        for key, saved_value in saved.items():
+            if isinstance(saved_value, dict) and isinstance(self.config.get(key), dict):
+                for nested_key, nested_val in saved_value.items():
+                    self.config[key][nested_key] = nested_val
+            else:
+                self.config[key] = saved_value
 
     def _write_config_file_locked(self) -> None:
         """Persist config; caller must hold _save_lock."""
@@ -239,9 +241,13 @@ class Config:
         self.config[key] = value
         self._schedule_save()
     
+    # -----------------------------------------------------------------------
+    # Executable Paths
+    # -----------------------------------------------------------------------
+
     def get_ffmpeg_path(self) -> str:
         """Get FFmpeg executable path"""
-        return self.get("ffmpeg_path", "")
+        return self._validate_exe_path(self.config.get("ffmpeg_path", ""))
     
     def set_ffmpeg_path(self, path: str):
         """Set FFmpeg executable path"""
@@ -249,7 +255,7 @@ class Config:
 
     def get_ffprobe_path(self) -> str:
         """Get ffprobe executable path"""
-        return self.get("ffprobe_path", "")
+        return self._validate_exe_path(self.config.get("ffprobe_path", ""))
 
     def set_ffprobe_path(self, path: str):
         """Set ffprobe executable path"""
@@ -257,7 +263,7 @@ class Config:
     
     def get_handbrake_path(self) -> str:
         """Get HandBrake executable path"""
-        return self.get("handbrake_path", "")
+        return self._validate_exe_path(self.config.get("handbrake_path", ""))
     
     def set_handbrake_path(self, path: str):
         """Set HandBrake executable path"""
@@ -265,7 +271,7 @@ class Config:
     
     def get_mkvinfo_path(self) -> str:
         """Get mkvinfo executable path"""
-        return self.get("mkvinfo_path", "")
+        return self._validate_exe_path(self.config.get("mkvinfo_path", ""))
     
     def set_mkvinfo_path(self, path: str):
         """Set mkvinfo executable path"""
@@ -322,6 +328,10 @@ class Config:
         n = max(0, min(99, int(value)))
         self.set("strip_leading_path_segments", n)
     
+    # -----------------------------------------------------------------------
+    # Encoding Settings
+    # -----------------------------------------------------------------------
+
     def get_encoding_mode(self) -> str:
         """Get encoding mode preference"""
         return self.get("encoding_mode", "sequential")
@@ -361,6 +371,10 @@ class Config:
     def set_allow_japanese_audio_with_english_subs(self, value: bool):
         """Set allow Japanese audio with English subs"""
         self.set("allow_japanese_audio_with_english_subs", value)
+
+    # -----------------------------------------------------------------------
+    # Audio Normalize Settings
+    # -----------------------------------------------------------------------
 
     def get_audio_normalize_enabled(self) -> bool:
         """When True, FFmpeg commands from the preset translator include single-pass loudnorm on audio."""
@@ -415,6 +429,10 @@ class Config:
             self._clamp_float(value, 1.0, 20.0, 11.0),
         )
 
+    # -----------------------------------------------------------------------
+    # Validation Helpers
+    # -----------------------------------------------------------------------
+
     @staticmethod
     def _clamp_float(raw: Any, lo: float, hi: float, fallback: float) -> float:
         try:
@@ -441,6 +459,18 @@ class Config:
                 print(f"Config: invalid regex pattern {p!r} dropped: {exc}")
         return valid
 
+    _SAFE_PATH_RE = re.compile(r'^[^;&|`$<>\n\r]*$')
+
+    def _validate_exe_path(self, path: str) -> str:
+        """Return path if it looks safe, else empty string."""
+        if path and not self._SAFE_PATH_RE.match(path):
+            return ""
+        return path
+
+    # -----------------------------------------------------------------------
+    # Audio Track Settings
+    # -----------------------------------------------------------------------
+
     def get_audio_language_tags(self) -> list:
         """Get audio language tags to match"""
         return self.get("audio_language_tags", ["en", "eng"])
@@ -465,6 +495,10 @@ class Config:
         """Set audio exclude patterns"""
         self.set("audio_exclude_patterns", self._sanitize_regex_patterns(patterns))
     
+    # -----------------------------------------------------------------------
+    # Subtitle Settings
+    # -----------------------------------------------------------------------
+
     def get_subtitle_language_tags(self) -> list:
         """Get subtitle language tags to match"""
         return self.get("subtitle_language_tags", ["en", "eng"])
@@ -500,6 +534,10 @@ class Config:
         """Set subtitle exclude patterns"""
         self.set("subtitle_exclude_patterns", self._sanitize_regex_patterns(patterns))
     
+    # -----------------------------------------------------------------------
+    # Preset Management
+    # -----------------------------------------------------------------------
+
     def get_saved_ffmpeg_commands(self) -> dict:
         """Get saved FFmpeg commands"""
         return self.get("saved_ffmpeg_commands", {})
@@ -695,6 +733,10 @@ class Config:
         config_dict["external_ass"] = action
         self.set_subtitle_handling(config_dict)
 
+    # -----------------------------------------------------------------------
+    # UI & Miscellaneous
+    # -----------------------------------------------------------------------
+
     def get_warn_on_ass_mux(self) -> bool:
         """Get warn on ASS muxing setting"""
         return self.get("warn_on_ass_mux", True)
@@ -747,6 +789,10 @@ class Config:
         config = self.get_quality_preset_config(preset_name)
         return config.get("preset", "medium")
 
+    # -----------------------------------------------------------------------
+    # Stats & API
+    # -----------------------------------------------------------------------
+
     def get_stats_api_enabled(self) -> bool:
         return bool(self.config.get("stats_api_enabled", True))
 
@@ -755,10 +801,16 @@ class Config:
         self._schedule_save()
 
     def get_stats_api_base_url(self) -> str:
-        return str(self.config.get("stats_api_base_url") or "https://ffmpeg-encode.com").strip()
+        url = str(self.config.get("stats_api_base_url") or "").strip()
+        if url and not url.startswith("https://"):
+            return ""  # silently reject stored non-https URLs
+        return url or "https://ffmpeg-encode.com"
 
     def set_stats_api_base_url(self, url: str) -> None:
-        self.config["stats_api_base_url"] = (url or "").strip()
+        url = (url or "").strip()
+        if url and not url.startswith("https://"):
+            raise ValueError(f"Stats API URL must use https://: {url!r}")
+        self.config["stats_api_base_url"] = url
         self._schedule_save()
 
     def _ffmpeg_encoding_raw(self) -> Dict[str, Any]:

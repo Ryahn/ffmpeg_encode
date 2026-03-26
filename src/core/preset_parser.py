@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from utils.validation import safe_int, safe_str
+
 # Hard limit: a valid HandBrake JSON preset is a few KB at most.
 _MAX_PRESET_FILE_BYTES = 1 * 1024 * 1024  # 1 MB
 
@@ -16,36 +18,6 @@ class PresetParser:
         self.preset_data: Optional[Dict[str, Any]] = None
         self.preset: Optional[Dict[str, Any]] = None
         self._load()
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _safe_int(value: Any, default: int, lo: int, hi: int) -> int:
-        """Cast *value* to int and clamp to [lo, hi]; return *default* on error."""
-        try:
-            result = int(float(value))
-        except (TypeError, ValueError):
-            return default
-        return max(lo, min(hi, result))
-
-    @staticmethod
-    def _safe_str(value: Any, default: str, allowed: Optional[set] = None) -> str:
-        """Return *value* as a stripped string if it is in *allowed* (or if no allowlist).
-
-        Falls back to *default* when the value is not a string, is empty, or is
-        not in the allowlist.  Keeps the trusted-input surface for values that go
-        directly into FFmpeg filter strings or subprocess args as small as possible.
-        """
-        if not isinstance(value, str):
-            return default
-        value = value.strip()
-        if not value:
-            return default
-        if allowed is not None and value not in allowed:
-            return default
-        return value
 
     def _load(self):
         """Load and parse the preset file"""
@@ -86,7 +58,7 @@ class PresetParser:
         clamped so a crafted preset cannot pass an unexpected string to FFmpeg.
         """
         raw = self.preset.get("VideoQualitySlider", 22) if self.preset else 22
-        return self._safe_int(raw, default=22, lo=0, hi=51)
+        return safe_int(raw, default=22, lo=0, hi=51)
 
     def get_video_preset(self) -> str:
         """Get video preset (e.g., 'medium')"""
@@ -95,13 +67,13 @@ class PresetParser:
             "medium", "slow", "slower", "veryslow", "placebo",
         }
         raw = self.preset.get("VideoPreset", "medium") if self.preset else "medium"
-        return self._safe_str(raw, default="medium", allowed=_ALLOWED)
+        return safe_str(raw, default="medium", allowed=_ALLOWED)
 
     def get_video_profile(self) -> str:
         """Get video profile (e.g., 'high')"""
         _ALLOWED = {"baseline", "main", "high", "high10", "high422", "high444", "main10"}
         raw = self.preset.get("VideoProfile", "high") if self.preset else "high"
-        return self._safe_str(raw, default="high", allowed=_ALLOWED)
+        return safe_str(raw, default="high", allowed=_ALLOWED)
 
     def get_video_level(self) -> str:
         """Get video level (e.g., '4.0')"""
@@ -112,7 +84,7 @@ class PresetParser:
             "6.0", "6.1", "6.2",
         }
         raw = str(self.preset.get("VideoLevel", "4.0")) if self.preset else "4.0"
-        return self._safe_str(raw, default="4.0", allowed=_ALLOWED)
+        return safe_str(raw, default="4.0", allowed=_ALLOWED)
 
     def get_video_resolution(self) -> tuple:
         """Get video resolution (width, height).
@@ -123,8 +95,8 @@ class PresetParser:
         """
         if not self.preset:
             return (1920, 1080)
-        width = self._safe_int(self.preset.get("PictureWidth", 1920), default=1920, lo=8, hi=7680)
-        height = self._safe_int(self.preset.get("PictureHeight", 1080), default=1080, lo=8, hi=7680)
+        width = safe_int(self.preset.get("PictureWidth", 1920), default=1920, lo=8, hi=7680)
+        height = safe_int(self.preset.get("PictureHeight", 1080), default=1080, lo=8, hi=7680)
         return (width, height)
     
     def get_video_framerate(self) -> Optional[str]:
@@ -156,7 +128,7 @@ class PresetParser:
         audio_list = self.preset.get("AudioList", [])
         if audio_list:
             raw = audio_list[0].get("AudioBitrate", 160)
-            return self._safe_int(raw, default=160, lo=32, hi=640)
+            return safe_int(raw, default=160, lo=32, hi=640)
         return 160
     
     def get_audio_mixdown(self) -> str:

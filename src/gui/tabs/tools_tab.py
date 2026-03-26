@@ -49,8 +49,8 @@ class ToolsTab(QWidget):
         self._subtitle_encoder: Optional[Encoder] = None
         self._audio_thread: Optional[threading.Thread] = None
         self._sub_thread: Optional[threading.Thread] = None
-        self._audio_abort = False
-        self._sub_abort = False
+        self._audio_abort = threading.Event()
+        self._sub_abort = threading.Event()
 
         self._bridge_audio = _ToolPanelBridge(self)
         self._bridge_sub = _ToolPanelBridge(self)
@@ -341,7 +341,7 @@ class ToolsTab(QWidget):
 
         self._audio_log.clear()
         self._audio_progress.reset()
-        self._audio_abort = False
+        self._audio_abort.clear()
         self._audio_run.setEnabled(False)
         self._audio_stop.setEnabled(True)
         if self.encoder:
@@ -362,14 +362,14 @@ class ToolsTab(QWidget):
             failed = 0
             try:
                 for n, path in enumerate(files, start=1):
-                    if self._audio_abort:
+                    if self._audio_abort.is_set():
                         self._bridge_audio.log_msg.emit("INFO", "Stopped by user.")
                         break
                     if self.encoder:
                         self.encoder.reset_stop_event()
 
                     def run_ff(argv: list[str], out_path: Path) -> bool:
-                        if self._audio_abort or not self.encoder:
+                        if self._audio_abort.is_set() or not self.encoder:
                             return False
                         return self.encoder.run_ffmpeg_argv(argv, out_path)
 
@@ -419,7 +419,7 @@ class ToolsTab(QWidget):
         self._audio_thread.start()
 
     def _stop_audio_batch(self) -> None:
-        self._audio_abort = True
+        self._audio_abort.set()
         if self.encoder:
             self.encoder.stop()
 
@@ -450,7 +450,7 @@ class ToolsTab(QWidget):
 
         self._sub_log.clear()
         self._sub_progress.reset()
-        self._sub_abort = False
+        self._sub_abort.clear()
         self._sub_run.setEnabled(False)
         self._sub_stop.setEnabled(True)
 
@@ -466,13 +466,13 @@ class ToolsTab(QWidget):
             total = len(videos)
             try:
                 for n, path in enumerate(videos, start=1):
-                    if self._sub_abort:
+                    if self._sub_abort.is_set():
                         self._bridge_sub.log_msg.emit("INFO", "Stopped by user.")
                         break
                     sub_enc.reset_stop_event()
 
                     def run_ff(argv: list[str], out_path: Path) -> bool:
-                        if self._sub_abort:
+                        if self._sub_abort.is_set():
                             return False
                         return sub_enc.run_ffmpeg_argv(argv, out_path)
 
@@ -500,7 +500,7 @@ class ToolsTab(QWidget):
         self._sub_thread.start()
 
     def _stop_sub_batch(self) -> None:
-        self._sub_abort = True
+        self._sub_abort.set()
         if self._subtitle_encoder:
             self._subtitle_encoder.stop()
 
@@ -508,6 +508,10 @@ class ToolsTab(QWidget):
         """Stop any in-progress Tools batch (e.g. on app exit)."""
         self._stop_audio_batch()
         self._stop_sub_batch()
+        if self._audio_thread and self._audio_thread.is_alive():
+            self._audio_thread.join(timeout=5.0)
+        if self._sub_thread and self._sub_thread.is_alive():
+            self._sub_thread.join(timeout=5.0)
 
     def refresh_loudnorm_from_config(self) -> None:
         """If Settings / FFmpeg tab changed loudnorm, optionally sync (when visible)."""

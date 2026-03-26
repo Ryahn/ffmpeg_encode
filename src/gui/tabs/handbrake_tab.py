@@ -47,6 +47,7 @@ class _HandBrakeUiBridge(QObject):
     reset_ui = pyqtSignal()
     toast = pyqtSignal(str, str)
     status_text = pyqtSignal(str)
+    file_updated = pyqtSignal(int, object)
 
 
 class HandBrakeTab(QWidget):
@@ -58,7 +59,7 @@ class HandBrakeTab(QWidget):
         self.encoder: Optional[Encoder] = None
         self.track_analyzer: Optional[TrackAnalyzer] = None
         self.encoding_thread: Optional[threading.Thread] = None
-        self.is_encoding = False
+        self._is_encoding = threading.Event()
         self.batch_stats: Optional[BatchStats] = None
         self.get_files_callback: Optional[Callable] = None
         self.update_file_callback: Optional[Callable] = None
@@ -154,11 +155,16 @@ class HandBrakeTab(QWidget):
         self._bridge.reset_ui.connect(self._reset_ui_on_encode_end)
         self._bridge.toast.connect(self._emit_toast)
         self._bridge.status_text.connect(self.progress_display.set_status)
+        self._bridge.file_updated.connect(self._on_file_updated)
 
         self._init_encoder()
         self._refresh_preset_dropdown()
         self._load_last_preset()
         self._update_command_preview_display()
+
+    @property
+    def is_encoding(self) -> bool:
+        return self._is_encoding.is_set()
 
     @property
     def _use_settings_mode(self) -> bool:
@@ -418,6 +424,10 @@ class HandBrakeTab(QWidget):
         if hasattr(w, "toast_manager"):
             w.toast_manager.show(message, message_type=kind, duration=5)
 
+    def _on_file_updated(self, index: int, file_data: object) -> None:
+        if self.update_file_callback:
+            self.update_file_callback(index, file_data)
+
     def _show_toast(self, message: str, kind: str = "warning") -> None:
         self._emit_toast(message, kind)
 
@@ -432,11 +442,11 @@ class HandBrakeTab(QWidget):
         if not files:
             self._show_toast("No files to encode", "warning")
             return
-        if self.is_encoding:
+        if self._is_encoding.is_set():
             return
         if self.encoding_thread and self.encoding_thread.is_alive():
             self.encoding_thread.join(timeout=2.0)
-        self.is_encoding = True
+        self._is_encoding.set()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         if self.encoder:
@@ -459,7 +469,7 @@ class HandBrakeTab(QWidget):
         skipped_count = 0
         error_count = 0
         for i, file_data in enumerate(files):
-            if not self.is_encoding:
+            if not self._is_encoding.is_set():
                 break
             source_file = Path(file_data["path"])
             if file_data.get("tracks_from_user"):
@@ -511,8 +521,7 @@ class HandBrakeTab(QWidget):
                 )
             stream_idx = file_data.get("audio_ffmpeg_stream_index")
             hb_audio = stream_idx + 1 if stream_idx is not None else effective_audio
-            if self.update_file_callback:
-                self.update_file_callback(i, file_data)
+            self._bridge.file_updated.emit(i, file_data)
             if self.get_output_path_callback:
                 output_dir = self.get_output_path_callback(source_file)
             else:
@@ -533,8 +542,7 @@ class HandBrakeTab(QWidget):
                 skipped_count += 1
                 continue
             file_data["status"] = "Encoding"
-            if self.update_file_callback:
-                self.update_file_callback(i, file_data)
+            self._bridge.file_updated.emit(i, file_data)
             file_start_time = time.time()
             if use_settings and hb_settings is not None:
                 success = self.encoder.encode_with_handbrake_settings(
@@ -591,8 +599,7 @@ class HandBrakeTab(QWidget):
                         error_msg="Encoding failed",
                     )
                 error_count += 1
-            if self.update_file_callback:
-                self.update_file_callback(i, file_data)
+            self._bridge.file_updated.emit(i, file_data)
             if self.batch_stats and completed_count >= 3:
                 eta = self.batch_stats.calculate_batch_eta(len(files), completed_count)
                 if eta:
@@ -615,7 +622,7 @@ class HandBrakeTab(QWidget):
         self._bridge.reset_ui.emit()
 
     def _reset_ui_on_encode_end(self) -> None:
-        self.is_encoding = False
+        self._is_encoding.clear()
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_display.reset()
@@ -624,6 +631,6 @@ class HandBrakeTab(QWidget):
         def stop_worker():
             if self.encoder:
                 self.encoder.stop()
-            self.is_encoding = False
+            self._is_encoding.clear()
 
         threading.Thread(target=stop_worker, daemon=True).start()

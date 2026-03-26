@@ -68,6 +68,9 @@ def sync_lifetime_stats_to_api() -> None:
     if not base:
         logger.warning("Stats API: empty base URL, skipping sync")
         return
+    _url = base.strip()
+    if not _url.startswith("https://"):
+        raise ValueError(f"Stats API URL must use https://: {_url!r}")
     try:
         status = _post_stats(base)
         if status != 200:

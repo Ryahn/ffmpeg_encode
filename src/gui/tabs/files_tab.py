@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..dialogs.set_tracks_dialog import show_set_tracks_dialog
+from ..workers import AnalyzeOneWorker
 from ..widgets.file_list import FileListWidget
 from core.file_scanner import FileScanner
 from core.track_analyzer import TrackAnalyzer
@@ -34,24 +35,6 @@ from utils.ffmpeg_paths import resolve_ffprobe_path
 
 logger = logging.getLogger(__name__)
 
-
-class _AnalyzeOneWorker(QObject):
-    """Runs analyze_tracks() for a single file off the GUI thread."""
-
-    finished = pyqtSignal(object, object)  # (tracks_dict, source_file)
-
-    def __init__(self, source_file: Path, analyzer: TrackAnalyzer):
-        super().__init__()
-        self._source_file = source_file
-        self._analyzer = analyzer
-
-    def run(self) -> None:
-        try:
-            tracks = self._analyzer.analyze_tracks(self._source_file)
-        except Exception:
-            raise
-
-        self.finished.emit(tracks, self._source_file)
 
 
 class _LoadTracksWorker(QObject):
@@ -139,6 +122,7 @@ class _CheckSubsWorker(QObject):
                         "-of", "csv=p=0",
                         source_file,
                     ],
+                    stdin=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=30,
                 )
@@ -169,7 +153,7 @@ class FilesTab(QWidget):
         self._load_tracks_busy = False
         self._load_thread: Optional[QThread] = None
         self._analyze_thread: Optional[QThread] = None
-        self._analyze_worker: Optional[_AnalyzeOneWorker] = None
+        self._analyze_worker: Optional[AnalyzeOneWorker] = None
         self._set_tracks_btn: Optional[QPushButton] = None
         self._check_subs_busy = False
         self._check_subs_thread: Optional[QThread] = None
@@ -648,7 +632,7 @@ class FilesTab(QWidget):
             self.on_status(f"Analyzing tracks for {source_file.name}…")
 
         self._analyze_thread = QThread()
-        worker = _AnalyzeOneWorker(source_file, self.track_analyzer)
+        worker = AnalyzeOneWorker(source_file, self.track_analyzer)
         self._analyze_worker = worker  # Keep a Python reference so the QObject isn't GC'd.
         worker.moveToThread(self._analyze_thread)
         self._analyze_thread.started.connect(worker.run)

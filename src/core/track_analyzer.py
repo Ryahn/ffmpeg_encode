@@ -4,7 +4,7 @@ import logging
 import re
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Pattern
+from typing import Optional, Dict, List, Any, Pattern, Tuple
 import shutil
 
 from core.subprocess_utils import get_subprocess_kwargs
@@ -14,6 +14,7 @@ from utils.ffmpeg_paths import resolve_ffprobe_path
 logger = logging.getLogger(__name__)
 
 _REGEX_CACHE_MAX_KEYS = 64
+_TRACK_CACHE_MAX_ENTRIES = 256
 
 # Safety caps for mkvinfo output parsing.
 # A legitimate video file rarely has more than a handful of tracks; these limits
@@ -30,6 +31,7 @@ class TrackAnalyzer:
         self.mkvinfo_path = mkvinfo_path or self._find_mkvinfo()
         self.ffprobe_path = ffprobe_path or self._find_ffprobe()
         self._regex_cache: Dict[tuple, List[Pattern[str]]] = {}
+        self._track_cache: Dict[Tuple[str, float], Dict[str, Any]] = {}
 
     def _compiled_regexes(self, pattern_strings: List[str]) -> List[Pattern[str]]:
         key = tuple(pattern_strings)
@@ -85,13 +87,34 @@ class TrackAnalyzer:
         return resolve_ffprobe_path()
     
     def analyze_tracks(self, file_path: Path) -> Dict[str, Any]:
-        """Analyze tracks in a video file"""
+        """Analyze tracks in a video file, returning a cached result when the file
+        has not changed since the last call (keyed by path + mtime)."""
+        try:
+            mtime = file_path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        cache_key = (str(file_path), mtime)
+        cached = self._track_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = self._do_analyze_tracks(file_path)
+        if len(self._track_cache) >= _TRACK_CACHE_MAX_ENTRIES:
+            self._track_cache.clear()
+        self._track_cache[cache_key] = result
+        return result
+
+    def _do_analyze_tracks(self, file_path: Path) -> Dict[str, Any]:
+        """Analyze tracks in a video file (uncached implementation)."""
         if file_path.suffix.lower() == ".mkv" and self.mkvinfo_path:
             return self._analyze_mkv_tracks(file_path)
         elif self.ffprobe_path:
             return self._analyze_with_ffprobe(file_path)
         else:
             return {"audio": None, "subtitle": None, "error": "No analyzer available"}
+
+    def clear_track_cache(self) -> None:
+        """Invalidate all cached track analysis results."""
+        self._track_cache.clear()
     
     def _analyze_mkv_tracks(self, file_path: Path) -> Dict[str, Optional[int]]:
         """Analyze MKV tracks using mkvinfo"""

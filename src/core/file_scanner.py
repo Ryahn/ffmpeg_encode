@@ -1,18 +1,16 @@
 """Scan for video files in directories"""
 
 from pathlib import Path
-from typing import List, Set
+from typing import List
+
+from utils.constants import VIDEO_EXTENSIONS
 
 
 class FileScanner:
     """Scans directories for video files"""
-    
-    # Supported video file extensions
-    VIDEO_EXTENSIONS: Set[str] = {
-        ".mkv", ".mp4", ".mov", ".avi", ".m4v",
-        ".flv", ".wmv", ".webm", ".ts", ".mts",
-        ".m2ts", ".vob", ".3gp", ".3g2"
-    }
+
+    # Supported video file extensions (canonical set imported from utils.constants)
+    VIDEO_EXTENSIONS: frozenset = VIDEO_EXTENSIONS
     
     def __init__(self):
         self.found_files: List[Path] = []

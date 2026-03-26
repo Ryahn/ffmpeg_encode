@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from utils.validation import safe_int, safe_str
 
 # Allowlists for string parameters — prevent injection via crafted config values.
 _ENCODERS = {"x264", "x265", "nvenc_h264", "nvenc_h265", "vt_h264", "vt_h265"}
@@ -35,21 +36,6 @@ _SHARPEN_PRESETS = {"ultralight", "light", "medium", "strong"}
 _CHROMASMOOTH = {"off", "ultralight", "light", "medium", "strong", "stronger", "verystrong"}
 _FRAMERATES = {"auto", "5", "10", "12", "15", "23.976", "24", "25", "29.97", "30", "48", "50", "59.94", "60"}
 _FRAMERATE_MODES = {"cfr", "vfr", "pfr"}
-
-
-def _safe_str(value: Any, default: str, allowed: set) -> str:
-    if not isinstance(value, str):
-        return default
-    value = value.strip()
-    return value if value in allowed else default
-
-
-def _safe_int(value: Any, default: int, lo: int, hi: int) -> int:
-    try:
-        n = int(float(value))
-    except (TypeError, ValueError):
-        return default
-    return max(lo, min(hi, n))
 
 
 class HandBrakeCommandBuilder:
@@ -100,37 +86,37 @@ class HandBrakeCommandBuilder:
         parts: List[str] = []
 
         # Video encoder
-        encoder = _safe_str(settings.get("encoder"), "x264", _ENCODERS)
+        encoder = safe_str(settings.get("encoder"), "x264", _ENCODERS)
         parts.extend(["--encoder", encoder])
 
         # Quality (RF/CRF)
-        quality = _safe_int(settings.get("quality"), 22, 0, 51)
+        quality = safe_int(settings.get("quality"), 22, 0, 51)
         parts.extend(["--quality", str(quality)])
 
         # Encoder preset (speed)
-        preset = _safe_str(settings.get("encoder_preset"), "medium", _PRESETS)
+        preset = safe_str(settings.get("encoder_preset"), "medium", _PRESETS)
         parts.extend(["--encoder-preset", preset])
 
         # Encoder profile
-        profile = _safe_str(settings.get("encoder_profile"), "auto", _PROFILES)
+        profile = safe_str(settings.get("encoder_profile"), "auto", _PROFILES)
         if profile != "auto":
             parts.extend(["--encoder-profile", profile])
 
         # Encoder level
-        level = _safe_str(settings.get("encoder_level"), "auto", _LEVELS)
+        level = safe_str(settings.get("encoder_level"), "auto", _LEVELS)
         if level != "auto":
             parts.extend(["--encoder-level", level])
 
         # Encoder tune
-        tune = _safe_str(settings.get("encoder_tune"), "none", _TUNES)
+        tune = safe_str(settings.get("encoder_tune"), "none", _TUNES)
         if tune != "none":
             parts.extend(["--encoder-tune", tune])
 
         # Resolution
-        width = _safe_int(settings.get("width"), 0, 0, 7680)
-        height = _safe_int(settings.get("height"), 0, 0, 7680)
-        max_width = _safe_int(settings.get("max_width"), 1920, 16, 7680)
-        max_height = _safe_int(settings.get("max_height"), 1080, 16, 7680)
+        width = safe_int(settings.get("width"), 0, 0, 7680)
+        height = safe_int(settings.get("height"), 0, 0, 7680)
+        max_width = safe_int(settings.get("max_width"), 1920, 16, 7680)
+        max_height = safe_int(settings.get("max_height"), 1080, 16, 7680)
 
         if width > 0:
             parts.extend(["--width", str(width)])
@@ -140,26 +126,26 @@ class HandBrakeCommandBuilder:
         parts.extend(["--maxHeight", str(max_height)])
 
         # Crop
-        crop_mode = _safe_str(settings.get("crop_mode"), "auto", _CROP_MODES)
+        crop_mode = safe_str(settings.get("crop_mode"), "auto", _CROP_MODES)
         if crop_mode == "disabled":
             parts.extend(["--crop", "0:0:0:0"])
 
         # Audio
-        audio_encoder = _safe_str(settings.get("audio_encoder"), "av_aac", _AUDIO_ENCODERS)
+        audio_encoder = safe_str(settings.get("audio_encoder"), "av_aac", _AUDIO_ENCODERS)
         parts.extend(["--aencoder", audio_encoder])
 
         if audio_encoder != "copy":
-            audio_bitrate = _safe_int(settings.get("audio_bitrate"), 160, 32, 640)
+            audio_bitrate = safe_int(settings.get("audio_bitrate"), 160, 32, 640)
             parts.extend(["--ab", str(audio_bitrate)])
 
-            mixdown = _safe_str(settings.get("audio_mixdown"), "stereo", _MIXDOWNS)
+            mixdown = safe_str(settings.get("audio_mixdown"), "stereo", _MIXDOWNS)
             parts.extend(["--mixdown", mixdown])
 
         # Audio track placeholder
         parts.extend(["--audio", "{AUDIO_TRACK}"])
 
         # Container format
-        fmt = _safe_str(settings.get("format"), "av_mp4", _FORMATS)
+        fmt = safe_str(settings.get("format"), "av_mp4", _FORMATS)
         parts.extend(["--format", fmt])
 
         # Web optimize
@@ -178,31 +164,31 @@ class HandBrakeCommandBuilder:
         # --- Filters ---
 
         # Deinterlace
-        deinterlace = _safe_str(settings.get("deinterlace"), "off", _DEINTERLACE)
+        deinterlace = safe_str(settings.get("deinterlace"), "off", _DEINTERLACE)
         if deinterlace != "off":
             parts.append(f"--deinterlace={deinterlace}")
 
         # Detelecine
-        detelecine = _safe_str(settings.get("detelecine"), "off", _DETELECINE)
+        detelecine = safe_str(settings.get("detelecine"), "off", _DETELECINE)
         if detelecine != "off":
             parts.append("--detelecine")
 
         # Denoise
-        denoise = _safe_str(settings.get("denoise"), "off", _DENOISE)
+        denoise = safe_str(settings.get("denoise"), "off", _DENOISE)
         if denoise != "off":
-            denoise_preset = _safe_str(settings.get("denoise_preset"), "medium", _DENOISE_PRESETS)
+            denoise_preset = safe_str(settings.get("denoise_preset"), "medium", _DENOISE_PRESETS)
             parts.append(f"--denoise={denoise}")
             parts.append(f"--denoise-preset={denoise_preset}")
 
         # Sharpen
-        sharpen = _safe_str(settings.get("sharpen"), "off", _SHARPEN)
+        sharpen = safe_str(settings.get("sharpen"), "off", _SHARPEN)
         if sharpen != "off":
-            sharpen_preset = _safe_str(settings.get("sharpen_preset"), "medium", _SHARPEN_PRESETS)
+            sharpen_preset = safe_str(settings.get("sharpen_preset"), "medium", _SHARPEN_PRESETS)
             parts.append(f"--sharpen={sharpen}")
             parts.append(f"--sharpen-preset={sharpen_preset}")
 
         # Chromasmooth
-        chromasmooth = _safe_str(settings.get("chromasmooth"), "off", _CHROMASMOOTH)
+        chromasmooth = safe_str(settings.get("chromasmooth"), "off", _CHROMASMOOTH)
         if chromasmooth != "off":
             parts.append(f"--chromasmooth={chromasmooth}")
 
@@ -211,8 +197,8 @@ class HandBrakeCommandBuilder:
             parts.append("--grayscale")
 
         # Framerate
-        framerate = _safe_str(str(settings.get("framerate", "auto")), "auto", _FRAMERATES)
-        framerate_mode = _safe_str(settings.get("framerate_mode", "pfr"), "pfr", _FRAMERATE_MODES)
+        framerate = safe_str(str(settings.get("framerate", "auto")), "auto", _FRAMERATES)
+        framerate_mode = safe_str(settings.get("framerate_mode", "pfr"), "pfr", _FRAMERATE_MODES)
         if framerate != "auto":
             parts.extend(["--rate", framerate])
         parts.append(f"--{framerate_mode}")

@@ -10,19 +10,7 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from core.audio_normalize import build_integrated_loudnorm_filter
 from core.subprocess_utils import get_subprocess_kwargs
-
-VIDEO_EXTENSIONS = frozenset(
-    {
-        ".mkv",
-        ".mp4",
-        ".mov",
-        ".m4v",
-        ".avi",
-        ".flv",
-        ".wmv",
-        ".webm",
-    }
-)
+from utils.constants import VIDEO_EXTENSIONS
 
 
 def iter_media_files(root: Path, recursive: bool) -> List[Path]:
@@ -177,12 +165,12 @@ def run_normalize_file(
         return False, err
 
     if replace_original:
-        tmp = input_path.parent / f"{input_path.stem}.loudnorm-tmp{input_path.suffix}"
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
+        import tempfile
+        fd, tmp_str = tempfile.mkstemp(
+            suffix=input_path.suffix, dir=input_path.parent
+        )
+        os.close(fd)
+        tmp = Path(tmp_str)
         out_argv = argv[:-1] + [str(tmp)]
         ok = run_ffmpeg(out_argv, tmp)
         if not ok:

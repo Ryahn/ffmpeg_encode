@@ -142,13 +142,3 @@ def rewrite_ffmpeg_args_for_bitmap_subtitle_overlay(
             )
 
     return None
-
-
-def rewrite_ffmpeg_args_for_sidecar_subtitle_overlay(
-    args: List[str],
-    sidecar_sub_path: Path,
-) -> Optional[List[str]]:
-    """Backward-compatible wrapper: sidecar-only rewrite (no main stream index)."""
-    return rewrite_ffmpeg_args_for_bitmap_subtitle_overlay(
-        args, main_subtitle_stream_index=None, sidecar_sub_path=sidecar_sub_path
-    )

@@ -18,6 +18,10 @@ def _escape_ffmpeg_filter_path(path: str) -> str:
     never misinterpreted as escape prefixes.  The escaped value is intended to
     be wrapped in single quotes, e.g. ``subtitles='<escaped>'``.
     """
+    # Reject paths containing newline or carriage-return characters, which
+    # could allow injection into the FFmpeg filtergraph expression.
+    if '\n' in path or '\r' in path:
+        raise ValueError(f"File path contains illegal newline characters: {path!r}")
     # Normalise Windows separators — FFmpeg accepts forward slashes on Windows.
     path = path.replace("\\", "/")
     # Level 1: characters special inside a single-quoted lavfi option value.
@@ -74,7 +78,7 @@ class FFmpegTranslator:
         if video_encoder == "x264":
             cmd.extend(["-c:v", "libx264"])
         elif video_encoder == "x265":
-            cmd.extend(["-c:v", "hevc_nvenc"])
+            cmd.extend(["-c:v", "libx265"])
         else:
             cmd.extend(["-c:v", video_encoder])
         

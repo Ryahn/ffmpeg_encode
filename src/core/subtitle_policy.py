@@ -53,7 +53,7 @@ def decide_subtitle_action(
         elif source_type == "embedded":
             if subtitle_info.embedded:
                 stream = subtitle_info.embedded[0]  # Use first embedded subtitle stream
-                decision.stream_index = stream["index"]
+                decision.stream_index = stream.get("index")
                 codec = stream["codec"]
                 decision.codec = codec  # Store codec for later use
 
