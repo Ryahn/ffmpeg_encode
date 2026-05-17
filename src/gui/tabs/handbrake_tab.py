@@ -35,7 +35,11 @@ from core.handbrake_command_builder import HandBrakeCommandBuilder
 from core.notifications import BatchNotification
 from core.preset_parser import PresetParser
 from core.track_analyzer import TrackAnalyzer
-from core.track_selection import audio_mkv_stream_id_for_ordinal, compute_effective_tracks
+from core.track_selection import (
+    audio_mkv_stream_id_for_ordinal,
+    compute_effective_tracks,
+    handbrake_audio_track_index,
+)
 from storage import record_successful_encode
 from utils.config import config
 from utils.logger import logger
@@ -348,7 +352,8 @@ class HandBrakeTab(QWidget):
             output_dir = self.get_output_path_callback(source_file)
         else:
             output_dir = source_file.parent
-        output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
+        out_ext = config.get_output_file_extension()
+        output_file = output_dir / f"{source_file.stem}{suffix}{out_ext}"
 
         audio_track, subtitle_track = self._resolve_tracks_for_preview(fd, source_file)
         if audio_track is None:
@@ -461,10 +466,9 @@ class HandBrakeTab(QWidget):
         suffix = self.suffix_entry.text()
         use_settings = self._use_settings_mode
         hb_settings = None
-        output_ext = ".mp4"
+        output_ext = config.get_output_file_extension()
         if use_settings and self.hb_settings_tab:
             hb_settings = self.hb_settings_tab.get_settings_dict()
-            output_ext = self.hb_settings_tab.get_output_extension()
         completed_count = 0
         skipped_count = 0
         error_count = 0
@@ -519,8 +523,7 @@ class HandBrakeTab(QWidget):
                 file_data["audio_ffmpeg_stream_index"] = audio_mkv_stream_id_for_ordinal(
                     tracks, effective_audio
                 )
-            stream_idx = file_data.get("audio_ffmpeg_stream_index")
-            hb_audio = stream_idx + 1 if stream_idx is not None else effective_audio
+            hb_audio = handbrake_audio_track_index(effective_audio)
             self._bridge.file_updated.emit(i, file_data)
             if self.get_output_path_callback:
                 output_dir = self.get_output_path_callback(source_file)

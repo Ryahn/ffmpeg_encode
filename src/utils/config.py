@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from utils.ffmpeg_encoding import ALLOWED_MANUAL_PIX_FMT
+from utils.output_container import (
+    default_container_from_handbrake_format,
+    file_extension_for_container,
+    handbrake_format_for_container,
+    normalize_container,
+)
 
 CONFIG_SAVE_DEBOUNCE_SEC = 0.4
 
@@ -69,6 +75,7 @@ class Config:
             "output_destination": "input_folder",
             "default_output_folder": "",
             "default_output_suffix": "_encoded",
+            "default_output_container": "mp4",
             "strip_leading_path_segments": 0,
             "encoding_mode": "sequential",
             "last_scan_folder": "",
@@ -174,6 +181,7 @@ class Config:
     def _ensure_defaults(self):
         """Merge default configuration with loaded config to fill in missing keys"""
         saved = self.config.copy()
+        had_default_container = "default_output_container" in saved
         self._set_defaults()
         # Layer saved values on top of defaults so user settings are preserved
         for key, saved_value in saved.items():
@@ -182,6 +190,10 @@ class Config:
                     self.config[key][nested_key] = nested_val
             else:
                 self.config[key] = saved_value
+        if not had_default_container:
+            hb = self.config.get("handbrake_encoding")
+            fmt = hb.get("format", "av_mp4") if isinstance(hb, dict) else "av_mp4"
+            self.config["default_output_container"] = default_container_from_handbrake_format(fmt)
 
     def _write_config_file_locked(self) -> None:
         """Persist config; caller must hold _save_lock."""
@@ -313,6 +325,17 @@ class Config:
     def set_default_output_suffix(self, suffix: str):
         """Set default output suffix"""
         self.set("default_output_suffix", suffix)
+
+    def get_default_output_container(self) -> str:
+        """Logical container: mp4, m4v, mkv, mov, or webm."""
+        return normalize_container(self.get("default_output_container", "mp4"))
+
+    def set_default_output_container(self, container: str) -> None:
+        self.set("default_output_container", normalize_container(container))
+
+    def get_output_file_extension(self) -> str:
+        """Output filename extension including dot (e.g. '.mkv')."""
+        return file_extension_for_container(self.get_default_output_container())
 
     def get_strip_leading_path_segments(self) -> int:
         """Get number of leading path segments to strip when preserving folder structure"""
@@ -897,7 +920,9 @@ class Config:
 
     def get_hb_encoding_settings(self) -> Dict[str, Any]:
         """Return the full handbrake_encoding dict (with defaults filled in)."""
-        return dict(self._hb_encoding_raw())
+        d = dict(self._hb_encoding_raw())
+        d["format"] = handbrake_format_for_container(self.get_default_output_container())
+        return d
 
     def get_hb_encoder(self) -> str:
         _ALLOWED = {"x264", "x265", "nvenc_h264", "nvenc_h265", "vt_h264", "vt_h265"}
@@ -1030,12 +1055,11 @@ class Config:
         self._hb_encoding_set_key("audio_mixdown", value)
 
     def get_hb_format(self) -> str:
-        _ALLOWED = {"av_mp4", "av_mkv", "av_webm"}
-        v = self._hb_encoding_raw().get("format", "av_mp4")
-        return v if v in _ALLOWED else "av_mp4"
+        return handbrake_format_for_container(self.get_default_output_container())
 
     def set_hb_format(self, value: str) -> None:
-        self._hb_encoding_set_key("format", value)
+        """Legacy: maps HandBrake av_* format to default_output_container."""
+        self.set_default_output_container(default_container_from_handbrake_format(value))
 
     def get_hb_optimize(self) -> bool:
         return bool(self._hb_encoding_raw().get("optimize", True))

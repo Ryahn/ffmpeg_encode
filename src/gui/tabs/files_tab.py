@@ -337,10 +337,14 @@ class FilesTab(QWidget):
                             if remaining
                             else self.output_folder
                         )
-                        previews.append(str(od / f"{source_file.stem}{suffix}.mp4"))
+                        previews.append(str(od / f"{source_file.stem}{suffix}{config.get_output_file_extension()}"))
                     except ValueError:
                         previews.append(
-                            str(self.output_folder / source_file.parent.name / f"{source_file.stem}{suffix}.mp4")
+                            str(
+                                self.output_folder
+                                / source_file.parent.name
+                                / f"{source_file.stem}{suffix}{config.get_output_file_extension()}"
+                            )
                         )
                 elif self.scan_folder:
                     try:
@@ -352,21 +356,29 @@ class FilesTab(QWidget):
                             if remaining
                             else self.output_folder
                         )
-                        previews.append(str(od / f"{source_file.stem}{suffix}.mp4"))
+                        previews.append(str(od / f"{source_file.stem}{suffix}{config.get_output_file_extension()}"))
                     except ValueError:
-                        previews.append(str(self.output_folder / f"{source_file.stem}{suffix}.mp4"))
+                        previews.append(
+                            str(self.output_folder / f"{source_file.stem}{suffix}{config.get_output_file_extension()}")
+                        )
                 else:
                     od = self.output_folder / source_file.parent.name
-                    previews.append(str(od / f"{source_file.stem}{suffix}.mp4"))
+                    previews.append(str(od / f"{source_file.stem}{suffix}{config.get_output_file_extension()}"))
             if len(roots_seen) > 1 or len(previews) > 1:
                 return " | ".join(previews[:2]) + (" ..." if len(previews) > 2 else "")
-            return previews[0] if previews else str(self.output_folder / f"file{suffix}.mp4") + " (example)"
+            ex_ext = config.get_output_file_extension()
+            return (
+                previews[0]
+                if previews
+                else str(self.output_folder / f"file{suffix}{ex_ext}") + " (example)"
+            )
         parts = ["Subfolder", "Another"]
         remaining = parts[strip_n:] if strip_n < len(parts) else []
+        ex_ext = config.get_output_file_extension()
         ex = (
-            self.output_folder / Path(*remaining) / f"file{suffix}.mp4"
+            self.output_folder / Path(*remaining) / f"file{suffix}{ex_ext}"
             if remaining
-            else self.output_folder / f"file{suffix}.mp4"
+            else self.output_folder / f"file{suffix}{ex_ext}"
         )
         return str(ex) + " (example)"
 
@@ -598,7 +610,7 @@ class FilesTab(QWidget):
             parts.append(f"Analysis failed: {len(failed)} file(s)")
         if no_audio_names:
             parts.append(
-                f"No English audio (or disabled Japanese mode): {len(no_audio_names)} file(s)"
+                f"No selectable audio (multi-track, no English match, Japanese mode off): {len(no_audio_names)} file(s)"
             )
         if not parts:
             QMessageBox.information(self, "Load tracks", f"Updated track info for {len(results)} file(s).")

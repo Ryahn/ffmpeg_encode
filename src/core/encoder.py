@@ -16,6 +16,7 @@ import tempfile
 from core.subprocess_utils import get_subprocess_kwargs
 from core.ffmpeg_bitmap_subtitle_burn import rewrite_ffmpeg_args_for_bitmap_subtitle_overlay
 from utils.ffmpeg_paths import resolve_ffprobe_path
+from utils.output_container import subtitle_compat_container
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,9 @@ def can_mux_to_container(codec: str, container: str) -> Tuple[bool, Optional[str
 
     Returns: (supported: bool, method: Optional[str], warning: Optional[str])
     """
+    key = subtitle_compat_container(container)
     return CONTAINER_SUBTITLE_SUPPORT.get(
-        (codec, container),
+        (codec, key),
         (False, None, f"Muxing {codec} to {container} not supported")
     )
 

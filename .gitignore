@@ -37,6 +37,7 @@ env/
 Thumbs.db
 
 # Application specific
+*.mkv
 *.log
 config.json
 logs/
@@ -57,3 +58,11 @@ encode-mkv-files.ps1
 build_logs/
 
 .cursor/
+
+.claude/
+.claude-flow/
+.mcp.json
+CLAUDE.md
+.swarm/
+.claude_review/
+code_review.md

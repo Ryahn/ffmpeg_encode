@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, Optional, List
 from core.encoder import SubtitleInfo, SubtitleDecision, can_mux_to_container, TEXT_SUBTITLE_CODECS
+from utils.config import config
 
 
 def decide_subtitle_action(
@@ -97,12 +98,15 @@ def decide_subtitle_action(
             # embedded_text or embedded_bitmap
             codec = subtitle_info.embedded[0]["codec"] if subtitle_info.embedded else "subrip"
 
-        supported, method, warning = can_mux_to_container(codec, "mp4")
+        target = config.get_default_output_container()
+        supported, method, warning = can_mux_to_container(codec, target)
         if not supported:
             decision.action = "omit"
             if warning:
-                decision.warnings.append(f"Cannot mux {codec} to MP4: {warning}")
-            decision.reason = f"Container check: {codec} cannot be muxed to MP4, will omit subtitles"
+                decision.warnings.append(f"Cannot mux {codec} to {target}: {warning}")
+            decision.reason = (
+                f"Container check: {codec} cannot be muxed to {target}, will omit subtitles"
+            )
 
     # Add burn warning if user selected burn action
     if decision.action == "burn" and warn_on_burn:

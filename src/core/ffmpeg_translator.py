@@ -169,8 +169,9 @@ class FFmpegTranslator:
         # Copy metadata
         cmd.extend(["-map_metadata", "0"])
         
-        # Optimize for streaming (faststart)
-        if self.preset.get_optimize():
+        # Optimize for streaming (faststart) — ISO-BMFF outputs only
+        suffix = output_file.suffix.lower()
+        if self.preset.get_optimize() and suffix in (".mp4", ".m4v", ".mov"):
             cmd.extend(["-movflags", "+faststart"])
         
         # Overwrite output

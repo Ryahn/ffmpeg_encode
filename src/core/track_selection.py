@@ -6,6 +6,22 @@ from utils.config import config
 from core.track_analyzer import TrackAnalyzer
 
 
+def _audio_only_tracks(tracks: dict) -> list:
+    return sorted(
+        (
+            t
+            for t in (tracks.get("all_tracks") or [])
+            if t.get("type") == "audio" and t.get("id") is not None
+        ),
+        key=lambda t: t["id"],
+    )
+
+
+def handbrake_audio_track_index(effective_audio_ordinal: int) -> int:
+    """HandBrakeCLI ``--audio`` uses 1-based index among audio streams (same as our ordinal)."""
+    return effective_audio_ordinal
+
+
 def audio_mkv_stream_id_for_ordinal(tracks: dict, ordinal_1based: int) -> Optional[int]:
     """FFmpeg/Matroska 0-based stream index for the Nth audio stream (ordinal_1based is 1, 2, …)."""
     audios = sorted(
@@ -38,6 +54,12 @@ def compute_effective_tracks(
     suffix = f" for: {source_label}" if source_label else ""
 
     effective_audio = tracks.get("audio")
+    if not effective_audio and tracks.get("first_audio") and len(_audio_only_tracks(tracks)) == 1:
+        effective_audio = tracks["first_audio"]
+        if log_info:
+            log_info(
+                f"No language-tagged English audio; using only audio track ({effective_audio}){suffix}"
+            )
     if (
         not effective_audio
         and config.get_allow_japanese_audio_with_english_subs()

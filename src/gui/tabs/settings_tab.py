@@ -184,7 +184,34 @@ class SettingsTab(QWidget):
         self.suffix_entry = QLineEdit(config.get_default_output_suffix())
         self.suffix_entry.textChanged.connect(lambda t: config.set_default_output_suffix(t))
         f.addRow("Default output suffix:", self.suffix_entry)
+
+        self.output_container_combo = QComboBox()
+        self.output_container_combo.addItem("MP4 (.mp4)", "mp4")
+        self.output_container_combo.addItem("M4V (.m4v)", "m4v")
+        self.output_container_combo.addItem("MKV (.mkv)", "mkv")
+        self.output_container_combo.addItem("QuickTime (.mov)", "mov")
+        self.output_container_combo.addItem("WebM (.webm)", "webm")
+        self._set_output_container_combo(config.get_default_output_container())
+        self.output_container_combo.currentIndexChanged.connect(self._on_output_container_changed)
+        self.output_container_combo.setToolTip(
+            "Default container for encoded files (HandBrake and FFmpeg batch output). "
+            "FFmpeg command presets that show output.mp4 are still rewritten to this extension in previews."
+        )
+        f.addRow("Default output container:", self.output_container_combo)
         return g
+
+    def _set_output_container_combo(self, container_id: str) -> None:
+        cid = container_id or "mp4"
+        for i in range(self.output_container_combo.count()):
+            if self.output_container_combo.itemData(i) == cid:
+                self.output_container_combo.setCurrentIndex(i)
+                return
+        self.output_container_combo.setCurrentIndex(0)
+
+    def _on_output_container_changed(self) -> None:
+        data = self.output_container_combo.currentData()
+        if data:
+            config.set_default_output_container(str(data))
 
     def _files_defaults_group(self) -> QGroupBox:
         g = QGroupBox("Files tab defaults")
@@ -473,6 +500,9 @@ class SettingsTab(QWidget):
         self.default_output_folder_entry.setText(config.get_default_output_folder())
         self.default_output_folder_entry.blockSignals(False)
         self._sync_default_output_folder_widgets()
+        self.output_container_combo.blockSignals(True)
+        self._set_output_container_combo(config.get_default_output_container())
+        self.output_container_combo.blockSignals(False)
         self.loudnorm_I.blockSignals(True)
         self.loudnorm_TP.blockSignals(True)
         self.loudnorm_LRA.blockSignals(True)
@@ -580,6 +610,9 @@ class SettingsTab(QWidget):
             config.set_mkvinfo_path(self.mkvinfo_entry.text().strip())
             config.set_mediainfo_path(self.mediainfo_entry.text().strip())
             config.set_default_output_suffix(self.suffix_entry.text())
+            data = self.output_container_combo.currentData()
+            if data:
+                config.set_default_output_container(str(data))
             config.set_strip_leading_path_segments(self.strip_spin.value())
             config.set_default_output_folder(self.default_output_folder_entry.text().strip())
             config.set_encoding_mode("parallel" if self._m_par.isChecked() else "sequential")

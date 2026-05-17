@@ -754,7 +754,7 @@ class FFmpegTab(QWidget):
         if not self.ffmpeg_translator:
             return
         ph_in = Path("input.mkv")
-        ph_out = Path("output.mp4")
+        ph_out = Path(f"output{config.get_output_file_extension()}")
         subtitle_track_preview = None
         audio_preview = 1
         stream_preview: Optional[int] = None
@@ -847,7 +847,7 @@ class FFmpegTab(QWidget):
             if self.update_file_callback:
                 self.update_file_callback(0, files[0])
             ph_in = Path("input.mkv")
-            ph_out = Path("output.mp4")
+            ph_out = Path(f"output{config.get_output_file_extension()}")
             cmd = self.ffmpeg_translator.get_command_string(
                 input_file=ph_in,
                 output_file=ph_out,
@@ -1166,7 +1166,7 @@ class FFmpegTab(QWidget):
                 if self.get_output_path_callback
                 else source_file.parent
             )
-            output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
+            output_file = output_dir / f"{source_file.stem}{suffix}{config.get_output_file_extension()}"
             if skip_existing and not file_data.get("reencode", False) and output_file.exists():
                 self._on_log("INFO", f"Skipping (exists): {output_file.name}")
                 file_data["status"] = "Skipped"

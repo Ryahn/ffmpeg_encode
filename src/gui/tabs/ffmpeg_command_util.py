@@ -147,7 +147,7 @@ def generate_command_preview(
         output_dir = get_output_path_callback(source_file)
     else:
         output_dir = source_file.parent
-    output_file = output_dir / f"{source_file.stem}{suffix}.mp4"
+    output_file = output_dir / f"{source_file.stem}{suffix}{config.get_output_file_extension()}"
     audio_track = first_file_data.get("audio_track")
     subtitle_track = first_file_data.get("subtitle_track")
     # Do NOT call analyze_tracks() here — it is a blocking subprocess call that

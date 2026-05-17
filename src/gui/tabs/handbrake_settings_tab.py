@@ -30,6 +30,7 @@ from core.handbrake_command_builder import HandBrakeCommandBuilder
 from core.preset_parser import PresetParser
 from core.subprocess_utils import get_subprocess_kwargs
 from utils.config import config
+from utils.output_container import default_container_from_handbrake_format
 
 
 class HandBrakeSettingsTab(QWidget):
@@ -386,12 +387,12 @@ class HandBrakeSettingsTab(QWidget):
         group = QGroupBox("Container / Output")
         layout = QFormLayout()
 
-        self.format_combo = QComboBox()
-        self.format_combo.addItem("MP4", "av_mp4")
-        self.format_combo.addItem("MKV", "av_mkv")
-        self.format_combo.addItem("WebM", "av_webm")
-        self.format_combo.currentIndexChanged.connect(self._on_setting_changed)
-        layout.addRow("Format:", self.format_combo)
+        container_note = QLabel(
+            "File container (MP4, M4V, MKV, MOV, WebM) is set under Settings → Output Settings."
+        )
+        container_note.setWordWrap(True)
+        container_note.setStyleSheet("color: #888888; font-size: 12px;")
+        layout.addRow(container_note)
 
         self.optimize_cb = QCheckBox("Web optimize (moov atom at start)")
         self.optimize_cb.setChecked(True)
@@ -470,7 +471,7 @@ class HandBrakeSettingsTab(QWidget):
             self.profile_combo, self.level_combo, self.tune_combo,
             self.width_spin, self.height_spin, self.max_width_spin, self.max_height_spin,
             self.crop_combo, self.audio_encoder_combo, self.audio_bitrate_spin,
-            self.mixdown_combo, self.format_combo, self.optimize_cb, self.markers_cb,
+            self.mixdown_combo, self.optimize_cb, self.markers_cb,
             self.deinterlace_combo, self.detelecine_combo, self.denoise_combo,
             self.denoise_preset_combo, self.sharpen_combo, self.sharpen_preset_combo,
             self.chromasmooth_combo, self.grayscale_cb,
@@ -494,7 +495,6 @@ class HandBrakeSettingsTab(QWidget):
             self._set_combo(self.audio_encoder_combo, config.get_hb_audio_encoder())
             self.audio_bitrate_spin.setValue(config.get_hb_audio_bitrate())
             self._set_combo(self.mixdown_combo, config.get_hb_audio_mixdown())
-            self._set_combo(self.format_combo, config.get_hb_format())
             self.optimize_cb.setChecked(config.get_hb_optimize())
             self.markers_cb.setChecked(config.get_hb_markers())
             self._set_combo(self.deinterlace_combo, config.get_hb_deinterlace())
@@ -540,7 +540,6 @@ class HandBrakeSettingsTab(QWidget):
         config.set_hb_audio_encoder(self.audio_encoder_combo.currentData() or "av_aac")
         config.set_hb_audio_bitrate(self.audio_bitrate_spin.value())
         config.set_hb_audio_mixdown(self.mixdown_combo.currentData() or "stereo")
-        config.set_hb_format(self.format_combo.currentData() or "av_mp4")
         config.set_hb_optimize(self.optimize_cb.isChecked())
         config.set_hb_markers(self.markers_cb.isChecked())
         config.set_hb_deinterlace(self.deinterlace_combo.currentData() or "off")
@@ -632,7 +631,7 @@ class HandBrakeSettingsTab(QWidget):
         self._set_combo(self.mixdown_combo, parser.get_audio_mixdown())
 
         fmt = parser.get_file_format()
-        self._set_combo(self.format_combo, fmt)
+        config.set_default_output_container(default_container_from_handbrake_format(fmt))
         self.optimize_cb.setChecked(parser.get_optimize())
         self.markers_cb.setChecked(parser.get_chapter_markers())
 
@@ -698,12 +697,7 @@ class HandBrakeSettingsTab(QWidget):
         return config.get_hb_encoding_settings()
 
     def get_output_extension(self) -> str:
-        fmt = self.format_combo.currentData() or "av_mp4"
-        return {
-            "av_mp4": ".mp4",
-            "av_mkv": ".mkv",
-            "av_webm": ".webm",
-        }.get(fmt, ".mp4")
+        return config.get_output_file_extension()
 
     def _update_preview(self) -> None:
         settings = self.get_settings_dict()
